@@ -7,9 +7,13 @@ from collections.abc import Mapping
 import os
 
 
+class ConfigurationError(ValueError):
+    """Raised when required model configuration is absent."""
+
+
 @dataclass(frozen=True)
 class Settings:
-    """Optional model settings reserved for later implementation phases."""
+    """Model settings supplied only through the process environment."""
 
     api_key: str | None
     base_url: str | None
@@ -23,3 +27,18 @@ class Settings:
             base_url=source.get("AGENT_BASE_URL"),
             model=source.get("AGENT_MODEL"),
         )
+
+    def require_model_config(self) -> None:
+        missing = [
+            name
+            for name, value in (
+                ("AGENT_API_KEY", self.api_key),
+                ("AGENT_BASE_URL", self.base_url),
+                ("AGENT_MODEL", self.model),
+            )
+            if not value
+        ]
+        if missing:
+            raise ConfigurationError(
+                "Missing required model configuration: " + ", ".join(missing)
+            )

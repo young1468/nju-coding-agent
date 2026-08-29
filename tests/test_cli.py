@@ -2,18 +2,23 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import os
 
 
-def test_cli_accepts_a_task() -> None:
+def test_cli_reports_missing_model_configuration() -> None:
     task = "Fix the failing tests without modifying test files"
+    environment = os.environ.copy()
+    for name in ("AGENT_API_KEY", "AGENT_BASE_URL", "AGENT_MODEL"):
+        environment.pop(name, None)
     result = subprocess.run(
         [sys.executable, "-m", "coding_agent", task],
         capture_output=True,
         text=True,
         check=False,
+        env=environment,
     )
 
-    assert result.returncode == 0
-    assert f"Task: {task}" in result.stdout
-    assert "Phase 1 initialized" in result.stdout
-    assert result.stderr == ""
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "Configuration error:" in result.stderr
+    assert "AGENT_API_KEY" in result.stderr
