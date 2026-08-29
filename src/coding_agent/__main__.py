@@ -41,9 +41,12 @@ def main() -> int:
         print(f"Workspace error: {error}", file=sys.stderr)
         return 2
 
+    print(f"Task:\n{args.task}\n")
+    print(f"Workspace:\n{dispatcher.workspace}\n")
+    print("Starting agent...\n")
     result = CodingAgent(client, dispatcher, logger=print).run(args.task)
     if result.status == "completed":
-        print(f"Final answer: {result.answer}")
+        print(f"\nFinal Answer:\n{result.answer}")
         return 0
 
     print(f"Agent stopped ({result.status}): {result.answer}", file=sys.stderr)

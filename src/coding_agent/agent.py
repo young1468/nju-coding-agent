@@ -13,8 +13,14 @@ from .tools import ToolDispatcher, ToolResult, truncate_output
 
 MAX_STEPS = 12
 SYSTEM_MESSAGE = (
-    "You are a coding assistant. Explain your work clearly and only claim actions "
-    "that have been completed."
+    "You are a coding agent working inside the provided workspace.\n"
+    "Rules:\n"
+    "- Inspect relevant files before modifying them.\n"
+    "- Use the available local tools instead of guessing about workspace contents.\n"
+    "- Do not modify tests unless the user explicitly requests it.\n"
+    "- Run relevant tests after making code changes.\n"
+    "- Continue until the requested task is solved or a tool result makes it impossible.\n"
+    "- Provide a concise final summary that only claims completed actions."
 )
 class ModelClient(Protocol):
     def complete(
@@ -56,7 +62,7 @@ class CodingAgent:
         tool_steps = 0
 
         while True:
-            self._log(f"Agent step {tool_steps + 1}: requesting model.")
+            self._log(f"[Agent Step {tool_steps + 1}] Requesting model")
             try:
                 response = self._client.complete(messages, tools=TOOL_SCHEMAS)
             except Exception:
@@ -69,7 +75,7 @@ class CodingAgent:
             messages.append(_assistant_message(response))
             if response.tool_calls:
                 tool_steps += 1
-                self._log(f"Agent step {tool_steps}: model returned tool calls.")
+                self._log(f"[Agent Step {tool_steps}] Assistant: tool call")
                 for tool_call in response.tool_calls:
                     call_id = tool_call["id"]
                     if call_id is None:
@@ -78,7 +84,7 @@ class CodingAgent:
                             answer="Model returned a tool call without an identifier.",
                             messages=messages,
                         )
-                    result = self._execute_tool(tool_call)
+                    result = self._execute_tool(tool_call, tool_steps)
                     self._log_tool_result(tool_steps, result)
                     messages.append(
                         {"role": "tool", "tool_call_id": call_id, "content": result.to_json()}
@@ -92,7 +98,7 @@ class CodingAgent:
                 continue
 
             if response.content:
-                self._log("Agent returned a final answer.")
+                self._log("[Agent] Assistant: final answer")
                 return AgentResult(
                     status="completed", answer=response.content, messages=messages
                 )
@@ -107,7 +113,7 @@ class CodingAgent:
         if self._logger is not None:
             self._logger(message)
 
-    def _execute_tool(self, tool_call: dict[str, Any]) -> ToolResult:
+    def _execute_tool(self, tool_call: dict[str, Any], step: int) -> ToolResult:
         function = tool_call["function"]
         tool_name = function["name"]
         try:
@@ -118,12 +124,12 @@ class CodingAgent:
                 tool=tool_name,
                 error="Tool arguments were not valid JSON.",
             )
-        self._log(f"tool={tool_name} args={_log_arguments(arguments)}")
+        self._log(f"[Agent Step {step}] Tool: {tool_name}")
+        self._log(f"[Agent Step {step}] Arguments: {_log_arguments(arguments)}")
         return self._dispatcher.execute(tool_name, arguments)
 
     def _log_tool_result(self, step: int, result: ToolResult) -> None:
-        summary = result.error or json.dumps(result.result, ensure_ascii=False)
-        self._log(f"[step {step}] result={truncate_output(summary, 300)}")
+        self._log(f"[Agent Step {step}] Result: {_tool_result_summary(result)}")
 
 
 def _assistant_message(response: AssistantResponse) -> dict[str, Any]:
@@ -146,3 +152,16 @@ def _log_arguments(arguments: object) -> str:
         else:
             safe_arguments[name] = value
     return truncate_output(json.dumps(safe_arguments, ensure_ascii=False), 300)
+
+
+def _tool_result_summary(result: ToolResult) -> str:
+    summary: dict[str, object] = {"success": result.success, "tool": result.tool}
+    if result.error is not None:
+        summary["error"] = result.error
+    elif result.result is not None:
+        for name, value in result.result.items():
+            if name in {"content", "stdout", "stderr"} and isinstance(value, str):
+                summary[name] = f"<{len(value)} characters>"
+            else:
+                summary[name] = value
+    return truncate_output(json.dumps(summary, ensure_ascii=False), 300)
