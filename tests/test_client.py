@@ -6,6 +6,7 @@ import pytest
 
 from coding_agent.client import LLMClientError, OpenAICompatibleClient
 from coding_agent.config import ConfigurationError, Settings
+from coding_agent.schemas import TOOL_SCHEMAS
 
 
 class FakeCompletions:
@@ -38,6 +39,17 @@ def test_client_passes_model_and_messages_to_completion_api() -> None:
 def test_client_rejects_missing_settings_before_initialization() -> None:
     with pytest.raises(ConfigurationError, match="AGENT_API_KEY"):
         OpenAICompatibleClient.from_settings(Settings.from_env({}))
+
+
+def test_client_passes_tool_schemas_when_requested() -> None:
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="Done", tool_calls=[]))]
+    )
+    completions = FakeCompletions(response)
+
+    OpenAICompatibleClient("fake-model", completions).complete([], tools=TOOL_SCHEMAS)
+
+    assert completions.request == {"model": "fake-model", "messages": [], "tools": TOOL_SCHEMAS}
 
 
 def test_client_wraps_completion_api_errors() -> None:

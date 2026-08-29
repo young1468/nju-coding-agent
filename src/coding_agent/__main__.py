@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
 
 from .agent import CodingAgent
 from .client import LLMClientError, OpenAICompatibleClient
 from .config import ConfigurationError, Settings
+from .tools import ToolDispatcher
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Minimal coding agent CLI")
     parser.add_argument("task", help="Programming task for the agent")
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=Path.cwd(),
+        help="Existing directory where local tools may operate (default: current directory)",
+    )
     return parser
 
 
@@ -27,7 +35,13 @@ def main() -> int:
         print(f"Model client error: {error}", file=sys.stderr)
         return 1
 
-    result = CodingAgent(client, logger=print).run(args.task)
+    try:
+        dispatcher = ToolDispatcher(args.workspace)
+    except ValueError as error:
+        print(f"Workspace error: {error}", file=sys.stderr)
+        return 2
+
+    result = CodingAgent(client, dispatcher, logger=print).run(args.task)
     if result.status == "completed":
         print(f"Final answer: {result.answer}")
         return 0

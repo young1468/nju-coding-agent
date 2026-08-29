@@ -39,12 +39,19 @@ class OpenAICompatibleClient:
             raise LLMClientError("Unable to initialize the model client.") from error
         return cls(model=settings.model or "", completions=sdk_client.chat.completions)
 
-    def complete(self, messages: Sequence[Mapping[str, Any]]) -> AssistantResponse:
+    def complete(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        tools: Sequence[Mapping[str, Any]] | None = None,
+    ) -> AssistantResponse:
+        request: dict[str, Any] = {
+            "model": self._model,
+            "messages": [dict(message) for message in messages],
+        }
+        if tools is not None:
+            request["tools"] = [dict(tool) for tool in tools]
         try:
-            response = self._completions.create(
-                model=self._model,
-                messages=[dict(message) for message in messages],
-            )
+            response = self._completions.create(**request)
         except Exception as error:
             raise LLMClientError("Model request failed.") from error
         return _parse_response(response)
