@@ -33,3 +33,7 @@ dispatcher 从子进程环境移除三项模型变量，避免将模型凭据传
 workspace 限制是应用层路径约束，不是 OS 级 sandbox。它没有提供容器、Windows Sandbox、
 seccomp、namespace 或操作系统权限隔离。演示时应仅将可信的、独立的项目目录作为
 workspace，并将 `run_command` 视为具有该用户权限的本地执行能力。
+
+## Session Privacy
+
+会话文件可能包含任务、源代码片段和工具结果，保存在用户指定位置；`.sessions/` 已被 Git 忽略。workspace 校验防止同一会话误用于其他项目，但这不是加密或 OS 级隔离。

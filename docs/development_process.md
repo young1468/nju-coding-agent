@@ -45,3 +45,7 @@
   run_command -> final answer` 驱动真实本地工具，验证源代码修复、测试文件未改动和
   最终 pytest 成功。
 - 提交：`72995be feat: add coding task demo and e2e validation`。
+
+## 会话与上下文增强
+
+在完成核心工具后，参考 Pi 的 JSONL 会话和上下文重建思路，增加可选 SessionStore 与有界请求上下文；默认不启用会话时保持原有行为。

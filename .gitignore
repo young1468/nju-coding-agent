@@ -8,3 +8,6 @@ __pycache__/
 .coverage
 htmlcov/
 *.log
+
+.sessions/
+pi-agent/

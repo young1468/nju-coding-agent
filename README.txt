@@ -19,3 +19,11 @@ Agent 将结构化 Tool Result 回传模型并循环至最终回答。命令使�
 demo_workspace 含故意失败的 pytest，演示 Agent 检查文件、运行测试、修改实现、再次验证的
 全过程；运行 python scripts/reset_demo.py 可恢复演示初态。完整离线测试使用 Fake Model，
 不需要真实密钥。
+
+## 会话历史与上下文
+
+可通过 --session 将消息追加保存为本地 JSONL，会话文件包含 workspace 校验，下一次使用同一路径会自动恢复历史：
+
+  python -m coding_agent 继续修复 --workspace demo_workspace --session .sessions/demo.jsonl
+
+Agent 在每次模型请求前构造独立的上下文视图：保留 system message、最新任务和完整的最近工具交互；超出字符预算时加入明确的省略提示。字符数只是通用近似，不等同于特定模型的 token 计数。会话文件可能包含任务和工具输出，仅保存在本地并已加入 Git 忽略规则。

@@ -40,3 +40,7 @@ final answer
 
 测试断言 source 被修复、测试文件保持原样、每个 Tool Result 进入 message history，且修复前
 命令失败、修复后命令成功。
+
+## Session History
+
+`tests/test_session.py` 覆盖 JSONL 往返、损坏文件、workspace 不匹配、上下文超限和工具消息完整性；`test_session_agent.py` 覆盖跨运行恢复。会话日志可能包含源代码与命令输出，因此只用于本地调试，不能提交到仓库。
