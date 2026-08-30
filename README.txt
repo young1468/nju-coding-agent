@@ -8,7 +8,7 @@ GitHub：https://github.com/young1468/nju-coding-agent
   python -m pip install -r requirements.txt
   python -m pip install -e .
 
-将 AGENT_API_KEY、AGENT_BASE_URL、AGENT_MODEL 配置到进程环境变量后运行：
+在项目根目录创建本地 `.env`，填写 AGENT_API_KEY、AGENT_BASE_URL、AGENT_MODEL 后运行。程序会自动加载 `.env`；若同名进程环境变量已存在，环境变量优先。`.env` 已被 Git 忽略，不能提交真实凭据：
   python -m coding_agent "修复当前项目中的失败测试，不要修改测试文件" --workspace demo_workspace
 
 核心能力：模型原生 Tool Calling 驱动本地 list_files、read_file、write_file、run_command；
