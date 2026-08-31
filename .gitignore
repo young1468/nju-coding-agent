@@ -10,4 +10,5 @@ htmlcov/
 *.log
 
 .sessions/
+.coding-agent-gui.json
 pi-agent/

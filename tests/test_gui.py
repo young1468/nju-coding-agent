@@ -1,0 +1,52 @@
+from __future__ import annotations
+
+from coding_agent.agent import SYSTEM_MESSAGE
+from coding_agent.client import AssistantResponse
+from coding_agent.gui import GuiSettings, GuiSettingsStore, _execute_plan_task, _generate_title, _refine_plan_task, new_session_path
+from coding_agent.session import SessionStore
+
+
+def test_gui_settings_round_trip_and_new_session_path(tmp_path) -> None:
+    path = tmp_path / ".coding-agent-gui.json"
+    settings = GuiSettings(workspace="workspace", sessions_directory="sessions", mode="review", max_context_chars=100, recent_context_chars=50)
+    store = GuiSettingsStore(path)
+    store.save(settings)
+    assert store.load() == settings
+    created = new_session_path(tmp_path / "sessions")
+    assert created.parent == tmp_path / "sessions"
+    assert created.suffix == ".jsonl"
+
+
+def test_new_session_path_can_initialize_a_resumable_session(tmp_path) -> None:
+    workspace = tmp_path / "workspace"; workspace.mkdir()
+    path = new_session_path(tmp_path / "sessions")
+    store = SessionStore(path, workspace)
+    store.initialize([{"role": "system", "content": SYSTEM_MESSAGE}])
+
+    assert store.load_messages() == [{"role": "system", "content": SYSTEM_MESSAGE}]
+
+
+class TitleClient:
+    def __init__(self, response):
+        self.response = response
+
+    def complete(self, messages, tools=None):
+        if isinstance(self.response, Exception):
+            raise self.response
+        return self.response
+
+
+def test_title_generation_uses_model_and_falls_back_without_breaking_run() -> None:
+    generated = _generate_title(TitleClient(AssistantResponse("修复计算器加法逻辑", [])), "修复计算器", "测试已通过")
+    fallback = _generate_title(TitleClient(RuntimeError("offline")), "Fix the calculator implementation", "done")
+
+    assert generated == "修复计算器加法逻辑"
+    assert fallback == "Fix the calculator implementation"
+
+
+def test_plan_refinement_and_execution_prompts_include_user_context() -> None:
+    revised = _refine_plan_task("1. Read app.py", "Also preserve the public API")
+    execution = _execute_plan_task("Fix the failing test", "1. Update app.py\n2. Run pytest")
+
+    assert "Read app.py" in revised and "preserve the public API" in revised
+    assert "Fix the failing test" in execution and "Run pytest" in execution

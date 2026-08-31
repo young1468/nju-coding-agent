@@ -5,7 +5,7 @@ import sys
 import os
 
 
-def test_cli_reports_missing_model_configuration() -> None:
+def test_cli_reports_missing_model_configuration(tmp_path) -> None:
     task = "Fix the failing tests without modifying test files"
     environment = os.environ.copy()
     for name in ("AGENT_API_KEY", "AGENT_BASE_URL", "AGENT_MODEL"):
@@ -16,6 +16,7 @@ def test_cli_reports_missing_model_configuration() -> None:
         text=True,
         check=False,
         env=environment,
+        cwd=tmp_path,
     )
 
     assert result.returncode == 2

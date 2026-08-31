@@ -19,6 +19,15 @@ from .session import (
 from .tools import ToolDispatcher, ToolResult, truncate_output
 
 MAX_STEPS = 12
+MODE_TOOL_NAMES: dict[str, frozenset[str]] = {
+    "auto": frozenset({"list_files", "read_file", "write_file", "run_command"}),
+    "review": frozenset({"list_files", "read_file"}),
+    "plan": frozenset({"list_files", "read_file"}),
+}
+MODE_INSTRUCTIONS = {
+    "review": "Review mode is active. You may inspect files, but must not modify files or run commands. Return findings and recommendations.",
+    "plan": "Plan mode is active. Inspect relevant files before responding with a concrete implementation plan. You must not modify files or run commands.",
+}
 SYSTEM_MESSAGE = (
     "You are a coding agent working inside the provided workspace.\n"
     "Rules:\n"
@@ -58,9 +67,12 @@ class CodingAgent:
         session_store: SessionStore | None = None,
         max_context_chars: int = MAX_CONTEXT_CHARS,
         recent_context_chars: int = RECENT_CONTEXT_CHARS,
+        mode: str = "auto",
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
+        if mode not in MODE_TOOL_NAMES:
+            raise ValueError(f"Unknown agent mode: {mode}")
         self._client = client
         self._dispatcher = dispatcher
         self._max_steps = max_steps
@@ -68,6 +80,11 @@ class CodingAgent:
         self._session_store = session_store
         self._max_context_chars = max_context_chars
         self._recent_context_chars = recent_context_chars
+        self._mode = mode
+        self._allowed_tools = MODE_TOOL_NAMES[mode]
+        self._tool_schemas = [
+            schema for schema in TOOL_SCHEMAS if schema["function"]["name"] in self._allowed_tools
+        ]
 
     def run(self, task: str) -> AgentResult:
         try:
@@ -82,7 +99,9 @@ class CodingAgent:
                 request_messages = build_model_messages(
                     messages, self._max_context_chars, self._recent_context_chars
                 )
-                response = self._client.complete(request_messages, tools=TOOL_SCHEMAS)
+                if self._mode != "auto":
+                    request_messages = _with_mode_instruction(request_messages, self._mode)
+                response = self._client.complete(request_messages, tools=self._tool_schemas)
             except Exception:
                 return AgentResult(
                     status="error",
@@ -165,6 +184,12 @@ class CodingAgent:
     def _execute_tool(self, tool_call: dict[str, Any], step: int) -> ToolResult:
         function = tool_call["function"]
         tool_name = function["name"]
+        if tool_name not in self._allowed_tools:
+            return ToolResult(
+                success=False,
+                tool=tool_name,
+                error=f"Tool '{tool_name}' is disabled in {self._mode} mode.",
+            )
         try:
             arguments = json.loads(function["arguments"])
         except json.JSONDecodeError:
@@ -182,6 +207,15 @@ def _assistant_message(response: AssistantResponse) -> dict[str, Any]:
     if response.tool_calls:
         message["tool_calls"] = response.tool_calls
     return message
+
+
+def _with_mode_instruction(messages: list[dict[str, Any]], mode: str) -> list[dict[str, Any]]:
+    instruction = {"role": "system", "content": MODE_INSTRUCTIONS[mode]}
+    system_end = next(
+        (index for index, message in enumerate(messages) if message.get("role") != "system"),
+        len(messages),
+    )
+    return messages[:system_end] + [instruction] + messages[system_end:]
 
 
 def _log_arguments(arguments: object) -> str:

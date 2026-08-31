@@ -145,3 +145,28 @@ def test_agent_runs_complete_local_tool_flow(tmp_path) -> None:
     ]
     assert json.loads(tool_messages[2]["content"])["success"] is False
     assert json.loads(tool_messages[-1]["content"])["success"] is True
+
+
+def test_review_and_plan_modes_only_expose_read_tools_and_reject_writes(tmp_path) -> None:
+    for mode in ("review", "plan"):
+        model = FakeModel([tool_response(name="write_file", arguments='{"path": "bad.txt", "content": "no"}'), AssistantResponse(content="Done", tool_calls=[])])
+        result = CodingAgent(model, ToolDispatcher(tmp_path), mode=mode).run("Inspect this project")
+        assert [schema["function"]["name"] for schema in model.tool_schemas[0]] == ["list_files", "read_file"]
+        assert any(message.get("role") == "system" and mode.title() in message.get("content", "") for message in model.requests[0])
+        assert json.loads([message for message in result.messages if message["role"] == "tool"][0]["content"])["success"] is False
+        assert not (tmp_path / "bad.txt").exists()
+
+
+def test_plan_mode_can_read_files_before_returning_a_plan(tmp_path) -> None:
+    (tmp_path / "app.py").write_text("STATUS = 'broken'\n", encoding="utf-8")
+    model = FakeModel([
+        tool_response(name="read_file", arguments='{"path": "app.py"}'),
+        AssistantResponse(content="1. Update STATUS. 2. Run the existing test.", tool_calls=[]),
+    ])
+
+    result = CodingAgent(model, ToolDispatcher(tmp_path), mode="plan").run("Plan the fix")
+
+    assert result.status == "completed"
+    assert "Update STATUS" in result.answer
+    tool_result = json.loads([message for message in result.messages if message["role"] == "tool"][0]["content"])
+    assert tool_result["success"] is True

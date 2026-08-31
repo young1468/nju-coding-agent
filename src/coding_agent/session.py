@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -11,6 +12,20 @@ from typing import Any
 MAX_CONTEXT_CHARS = 48_000
 RECENT_CONTEXT_CHARS = 24_000
 SESSION_VERSION = 1
+
+
+@dataclass(frozen=True)
+class SessionSummary:
+    path: Path
+    workspace: str | None
+    title: str
+    preview: str
+    message_count: int
+    updated_at: datetime
+    recoverable: bool
+    error: str | None = None
+    stored_title: str | None = None
+    logs: tuple[str, ...] = ()
 
 class SessionError(RuntimeError):
     """Raised when a local session cannot be created, loaded, or updated."""
@@ -42,6 +57,43 @@ class SessionStore:
         except OSError as error:
             raise SessionError(f"Could not update session file: {self.path}") from error
     def load_messages(self) -> list[dict[str, Any]]:
+        entries = self._load_entries()
+        messages: list[dict[str, Any]] = []
+        for entry in entries[1:]:
+            if entry.get("type") in {"title", "log"}:
+                continue
+            if entry.get("type") != "message":
+                raise SessionError("Session file contains an invalid entry.")
+            message = entry.get("message")
+            if not isinstance(message, dict) or not isinstance(message.get("role"), str):
+                raise SessionError("Session file contains an invalid message.")
+            messages.append(message)
+        return messages
+
+    def load_title(self) -> str | None:
+        for entry in self._load_entries()[1:]:
+            if entry.get("type") == "title" and isinstance(entry.get("title"), str):
+                return entry["title"]
+        return None
+
+    def load_logs(self) -> list[str]:
+        return [
+            entry["content"]
+            for entry in self._load_entries()[1:]
+            if entry.get("type") == "log" and isinstance(entry.get("content"), str)
+        ]
+
+    def set_title(self, title: str) -> None:
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("Session title must be a non-empty string.")
+        self._append_metadata({"type": "title", "title": title.strip()})
+
+    def append_log(self, content: str) -> None:
+        if not isinstance(content, str):
+            raise ValueError("Session log must be a string.")
+        self._append_metadata({"type": "log", "content": content})
+
+    def _load_entries(self) -> list[dict[str, Any]]:
         try:
             lines = self.path.read_text(encoding="utf-8").splitlines()
         except OSError as error:
@@ -56,15 +108,16 @@ class SessionStore:
             raise SessionError("Session file has an unsupported version.")
         if header.get("workspace") != str(self.workspace):
             raise SessionError("Session workspace does not match the requested workspace.")
-        messages: list[dict[str, Any]] = []
-        for entry in entries[1:]:
-            if entry.get("type") != "message":
-                raise SessionError("Session file contains an invalid entry.")
-            message = entry.get("message")
-            if not isinstance(message, dict) or not isinstance(message.get("role"), str):
-                raise SessionError("Session file contains an invalid message.")
-            messages.append(message)
-        return messages
+        return entries
+
+    def _append_metadata(self, entry: dict[str, Any]) -> None:
+        if not self.path.is_file():
+            raise SessionError(f"Session file does not exist: {self.path}")
+        try:
+            with self.path.open("a", encoding="utf-8") as handle:
+                self._write(handle, entry)
+        except OSError as error:
+            raise SessionError(f"Could not update session file: {self.path}") from error
     @staticmethod
     def _entry(message: dict[str, Any]) -> dict[str, Any]:
         return {"type": "message", "message": message, "timestamp": _timestamp()}
@@ -108,6 +161,72 @@ def build_model_messages(history: list[dict[str, Any]], max_context_chars: int =
     notice = {"role": "system", "content": f"[Context notice: {omitted} earlier message(s) were omitted to fit the context budget. Retained messages contain the newest task state and tool results.]"}
     return deepcopy(systems) + [notice] + deepcopy(retained)
 
+
+def inspect_session(path: Path, preview_chars: int = 100) -> SessionSummary:
+    """Read session metadata for display without attempting to resume it."""
+    path = Path(path)
+    updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    try:
+        entries = [SessionStore._parse(line, index + 1) for index, line in enumerate(path.read_text(encoding="utf-8").splitlines())]
+        if not entries:
+            raise SessionError("Session file is empty.")
+        header = entries[0]
+        if header.get("type") != "session" or header.get("version") != SESSION_VERSION:
+            raise SessionError("Session file has an invalid or unsupported header.")
+        workspace = header.get("workspace")
+        if not isinstance(workspace, str) or not workspace:
+            raise SessionError("Session file is missing its workspace.")
+        messages = []
+        title: str | None = None
+        logs: list[str] = []
+        for entry in entries[1:]:
+            entry_type = entry.get("type")
+            if entry_type == "title":
+                if isinstance(entry.get("title"), str):
+                    title = entry["title"]
+                continue
+            if entry_type == "log":
+                if isinstance(entry.get("content"), str):
+                    logs.append(entry["content"])
+                continue
+            message = entry.get("message") if entry_type == "message" else None
+            if not isinstance(message, dict) or not isinstance(message.get("role"), str):
+                raise SessionError("Session file contains an invalid message.")
+            messages.append(message)
+        text_messages = [message["content"].strip() for message in messages if isinstance(message.get("content"), str) and message["content"].strip()]
+        user_messages = [message["content"].strip() for message in messages if message.get("role") == "user" and isinstance(message.get("content"), str) and message["content"].strip()]
+        fallback_title = _summary_text(user_messages[0], preview_chars) if user_messages else "Empty session"
+        preview = _summary_text(text_messages[-1], preview_chars) if text_messages else "No messages"
+        return SessionSummary(path, workspace, title or fallback_title, preview, len(messages), updated_at, True, None, title, tuple(logs))
+    except (OSError, SessionError) as error:
+        return SessionSummary(path, None, "Unreadable session", str(error), 0, updated_at, False, str(error))
+
+
+def list_session_summaries(directory: Path) -> list[SessionSummary]:
+    """List only direct JSONL children, newest first."""
+    directory = Path(directory)
+    if not directory.is_dir():
+        return []
+    return sorted(
+        (inspect_session(path) for path in directory.iterdir() if path.is_file() and path.suffix == ".jsonl"),
+        key=lambda summary: summary.updated_at,
+        reverse=True,
+    )
+
+
+def delete_session_file(path: Path, directory: Path) -> None:
+    """Permanently delete one direct JSONL child of the configured directory."""
+    session_directory = Path(directory).expanduser().resolve()
+    candidate = Path(path).expanduser().resolve(strict=False)
+    if candidate.parent != session_directory or candidate.suffix != ".jsonl":
+        raise SessionError("Only a direct .jsonl file in the session directory can be deleted.")
+    if not candidate.is_file():
+        raise SessionError("Session file does not exist.")
+    try:
+        candidate.unlink()
+    except OSError as error:
+        raise SessionError(f"Could not delete session file: {candidate}") from error
+
 def _groups(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     groups: list[list[dict[str, Any]]] = []
     index = 0
@@ -128,3 +247,8 @@ def _size(messages: list[dict[str, Any]]) -> int:
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _summary_text(value: str, limit: int) -> str:
+    compact = " ".join(value.split())
+    return compact if len(compact) <= limit else compact[: limit - 3] + "..."
