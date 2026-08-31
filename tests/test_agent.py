@@ -8,6 +8,7 @@ from typing import Any
 from coding_agent.agent import MAX_STEPS, CodingAgent, SYSTEM_MESSAGE
 from coding_agent.client import AssistantResponse
 from coding_agent.schemas import TOOL_SCHEMAS
+from coding_agent.session import SessionStore
 from coding_agent.tools import ToolDispatcher
 
 
@@ -69,6 +70,28 @@ def test_agent_records_tool_result_then_continues(tmp_path) -> None:
     assert len(model.requests) == 2
     assert model.requests[1][-1]["role"] == "tool"
     assert json.loads(model.requests[1][-1]["content"])["success"] is True
+
+
+def test_compaction_is_not_repeated_for_each_agent_step(tmp_path) -> None:
+    workspace = tmp_path
+    session = SessionStore(tmp_path / "session.jsonl", workspace)
+    history = [{"role": "system", "content": SYSTEM_MESSAGE}]
+    for _ in range(3):
+        history.extend([{"role": "user", "content": "old task " * 20}, {"role": "assistant", "content": "old answer " * 20}])
+    session.initialize(history)
+    model = FakeModel([AssistantResponse(content="summary", tool_calls=[]), tool_response(), AssistantResponse(content="done", tool_calls=[])])
+
+    result = CodingAgent(
+        model,
+        ToolDispatcher(workspace),
+        session_store=session,
+        max_context_chars=200,
+        recent_context_chars=100,
+        reserve_tokens=0,
+    ).run("new task")
+
+    assert result.status == "completed"
+    assert sum(1 for messages, tools in zip(model.requests, model.tool_schemas) if tools is None) == 1
 
 
 def test_agent_stops_after_maximum_tool_interaction_steps(tmp_path) -> None:

@@ -208,11 +208,32 @@ class CodingAgent:
         return schemas
 
     def _maybe_compact(self, messages: list[dict[str, Any]], force: bool = False) -> bool:
-        candidate = compact_messages(messages, self._max_context_chars, self._recent_context_chars, self._reserve_tokens)
+        source_start = 0
+        if self._compaction_state is not None:
+            state = self._compaction_state
+            watermark = state.compacted_at_index if state.compacted_at_index >= 0 else len(messages)
+            if not force:
+                if len(messages) <= watermark:
+                    return False
+                growth = estimate_tokens(messages[watermark:])
+                if growth < max(1, self._recent_context_chars // 4):
+                    return False
+            source_start = min(max(0, state.first_kept_index), len(messages))
+            source = [{"role": "system", "content": ""}] + messages[source_start:]
+            candidate = compact_messages(source, self._max_context_chars, self._recent_context_chars, self._reserve_tokens)
+            if candidate is not None:
+                prefix, local_first_kept = candidate
+                candidate = (prefix[1:], source_start + local_first_kept - 1)
+        else:
+            candidate = compact_messages(messages, self._max_context_chars, self._recent_context_chars, self._reserve_tokens)
         if candidate is None and not force:
             return False
         if candidate is None:
-            candidate = _forced_compaction_candidate(messages)
+            source = messages[source_start:]
+            candidate = _forced_compaction_candidate(source)
+            if candidate is not None and source_start:
+                prefix, local_first_kept = candidate
+                candidate = (prefix, source_start + local_first_kept)
         if candidate is None:
             return False
         prefix, first_kept = candidate
@@ -233,7 +254,9 @@ class CodingAgent:
         if self._compaction_state:
             read_files = tuple(dict.fromkeys((*self._compaction_state.read_files, *read_files)))
             modified_files = tuple(dict.fromkeys((*self._compaction_state.modified_files, *modified_files)))
-        self._compaction_state = CompactionState(summary, first_kept, max(0, estimate_tokens(prefix)), read_files, modified_files)
+        self._compaction_state = CompactionState(
+            summary, first_kept, max(0, estimate_tokens(prefix)), read_files, modified_files, len(messages)
+        )
         if self._session_store is not None:
             self._session_store.append_compaction(self._compaction_state)
         self._log("Context compacted into a structured summary.")

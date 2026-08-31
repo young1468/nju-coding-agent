@@ -289,7 +289,14 @@ class CodingAgentApp:
         self._start_run(task, workspace, session, self.mode.get(), "plan" if self.mode.get() == "plan" else "normal")
 
     def _start_run(self, task: str, workspace: str, session: str, mode: str, purpose: str) -> None:
-        self.running = True; self.log_lines = []; self._render_logs()
+        existing_logs: list[str] = []
+        session_path = Path(session).expanduser()
+        if session_path.is_file():
+            try:
+                existing_logs = SessionStore(session_path, Path(workspace)).load_logs()
+            except SessionError:
+                existing_logs = []
+        self.running = True; self.log_lines = existing_logs; self._render_logs()
         self.run_button.configure(state="disabled"); self._append_main(f"Task:\n{task}"); self._append_main("Starting agent...")
         self.refine_button.configure(state="disabled"); self.execute_plan_button.configure(state="disabled")
         self.delete_button.configure(state="disabled")
@@ -380,6 +387,10 @@ class CodingAgentApp:
             self._append_main("Using tool: " + line.split("Tool:", 1)[1].strip())
         elif "Assistant: tool call" in line:
             self._append_main("Agent is inspecting the workspace...")
+        elif "Context compacted" in line:
+            self._append_main("Context summarized to continue safely.")
+        elif "Context overflow" in line:
+            self._append_main("Context limit reached; retrying with a summary...")
         elif "final answer" in line.lower():
             self._append_main("Agent finished.")
 

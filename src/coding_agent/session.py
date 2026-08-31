@@ -37,6 +37,7 @@ class CompactionState:
     tokens_before: int
     read_files: tuple[str, ...] = ()
     modified_files: tuple[str, ...] = ()
+    compacted_at_index: int = -1
 
 class SessionError(RuntimeError):
     """Raised when a local session cannot be created, loaded, or updated."""
@@ -105,12 +106,17 @@ class SessionStore:
                 tokens_before = int(entry.get("tokens_before", 0) or 0)
             except (TypeError, ValueError):
                 tokens_before = 0
+            try:
+                compacted_at_index = int(entry.get("compacted_at_index", -1) or -1)
+            except (TypeError, ValueError):
+                compacted_at_index = -1
             latest = CompactionState(
                 summary=entry["summary"],
                 first_kept_index=max(0, entry["first_kept_index"]),
                 tokens_before=tokens_before,
                 read_files=tuple(item for item in entry.get("read_files", []) if isinstance(item, str)),
                 modified_files=tuple(item for item in entry.get("modified_files", []) if isinstance(item, str)),
+                compacted_at_index=compacted_at_index,
             )
         return latest
 
@@ -122,6 +128,7 @@ class SessionStore:
             "tokens_before": state.tokens_before,
             "read_files": list(state.read_files),
             "modified_files": list(state.modified_files),
+            "compacted_at_index": state.compacted_at_index,
         })
 
     def set_title(self, title: str) -> None:
