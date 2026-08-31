@@ -1,37 +1,45 @@
+# Coding Agent
+
 GitHub：https://github.com/young1468/nju-coding-agent
 
-本项目是个人独立实现的 Python CLI Coding Agent。它通过 OpenAI Compatible API
-与模型交互；Agent Loop、消息历史、Tool Schema、Tool Dispatcher、工具执行、错误处理
-和停止条件均由本项目自行实现，未使用 LangChain、OpenAI Agents SDK 等 Agent 框架。
+个人独立实现的 Python 编程智能体桌面应用，使用 Tkinter 和 OpenAI Compatible API，可读取、修改文件并运行命令；未使用 Agent 框架。
 
-环境：Python 3.11+。安装：
-  python -m pip install -r requirements.txt
-  python -m pip install -e .
+## 运行
 
-在项目根目录创建本地 `.env`，填写 AGENT_API_KEY、AGENT_BASE_URL、AGENT_MODEL 后运行。程序会自动加载 `.env`；若同名进程环境变量已存在，环境变量优先。`.env` 已被 Git 忽略，不能提交真实凭据：
-  python -m coding_agent "修复当前项目中的失败测试，不要修改测试文件" --workspace demo_workspace
+Python 3.11+，PowerShell：
 
-核心能力：模型原生 Tool Calling 驱动本地 list_files、read_file、write_file、run_command；
-Agent 将结构化 Tool Result 回传模型并循环至最终回答。命令使用 shell=False、workspace
-为 cwd、30 秒超时；文件路径 resolve 后检查 workspace 边界，防御 ../ 与 symlink/junction
-逃逸；子进程不继承模型配置。工具输出统一截断，日志不输出密钥。
+```powershell
+cd D:\Desktop\NJU\nju-coding-agent
+python -m pip install -r requirements.txt
+python -m pip install -e .
+python -m coding_agent.gui
+```
 
-demo_workspace 含故意失败的 pytest，演示 Agent 检查文件、运行测试、修改实现、再次验证的
-全过程；运行 python scripts/reset_demo.py 可恢复演示初态。完整离线测试使用 Fake Model，
-不需要真实密钥。
+项目根目录需创建 `.env`：
 
-## 会话历史与上下文
+```dotenv
+AGENT_API_KEY=your-api-key
+AGENT_BASE_URL=https://your-compatible-endpoint/v1
+AGENT_MODEL=your-model-name
+```
 
-可通过 --session 将消息追加保存为本地 JSONL，会话文件包含 workspace 校验，下一次使用同一路径会自动恢复历史：
+## GUI 功能
 
-  python -m coding_agent 继续修复 --workspace demo_workspace --session .sessions/demo.jsonl
+- 历史会话：创建、恢复、刷新和确认删除 JSONL 会话。
+- 对话区：显示任务、关键流程和回复；`View logs` 查看完整工具日志。
+- `auto` 可读写和运行命令；`review` 只读审查；`plan` 只读规划。
+- Plan 生成后可编辑或用 `Refine plan` 修改，确认后点 `Execute plan` 执行。
+- `Settings` 配置 Workspace、会话目录和上下文预算，不保存 API Key。
 
-Agent 在每次模型请求前构造独立的上下文视图：保留 system message、最新任务和完整的最近工具交互；超出字符预算时加入明确的省略提示。字符数只是通用近似，不等同于特定模型的 token 计数。会话文件可能包含任务和工具输出，仅保存在本地并已加入 Git 忽略规则。
+会话保存在本地 JSONL 并校验 Workspace；工具路径限制在 Workspace 内，命令使用 `shell=False`。
 
-## 本地桌面界面
+## 演示与测试
 
-启动：
+将 Workspace 设为 `demo_workspace` 可演示修复计算器并运行测试：
 
-  python -m coding_agent.gui
+```powershell
+python scripts/reset_demo.py
+python -m pytest
+```
 
-GUI 可管理本地 JSONL 会话、恢复历史 workspace，并在 Auto、Review 和 Plan 模式间切换。Auto 允许所有工具；Review 和 Plan 只允许列目录和读取文件，不允许写入或运行命令。Plan 模式生成计划后会显示可编辑的计划区，可用反馈重新整理计划，确认后点击 `Execute plan` 切换到 Auto 模式执行。GUI 设置保存在本地 `.coding-agent-gui.json`，不会保存 API Key；workspace 路径限制仍是应用层保护，不是 OS 级 sandbox。
+测试使用 Fake Model，不需要密钥或网络。CLI 仍可用：`python -m coding_agent "任务" --workspace demo_workspace`。
