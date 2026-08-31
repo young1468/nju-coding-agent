@@ -6,7 +6,7 @@
 python -m pytest
 ```
 
-当前测试套件共 27 项，全部离线运行，不需要 API Key，也不访问真实模型或网络。临时项目均
+当前测试套件共 45 项，全部离线运行，不需要 API Key，也不访问真实模型或网络。临时项目均
 由 pytest `tmp_path` 创建，不会修改 Coding Agent 工程本身。
 
 ## Unit Test
@@ -15,7 +15,7 @@ python -m pytest
 - Client：model/messages/tool schemas 是否正确传递，API 异常和畸形响应是否规范化。
 - Agent：system/user/assistant/tool history、普通最终回答、空响应、模型异常、MAX_STEPS。
 - 文件工具：正常读取、写入、父目录创建、缺失文件、目录读取、路径穿越、绝对/盘符路径、
-  symlink 或 junction 逃逸、输出截断。
+  symlink 或 junction 逃逸、行/字节双重输出截断、受控 output ID 回读。
 - 命令工具：成功、非零退出、stdout/stderr、return code、timeout、输出截断、`shell=False`、
   workspace cwd 和模型环境变量移除。
 - Dispatcher：未知工具、非法参数和内部异常均返回统一 Tool Result。
@@ -43,4 +43,6 @@ final answer
 
 ## Session History
 
-`tests/test_session.py` 覆盖 JSONL 往返、损坏文件、workspace 不匹配、上下文超限和工具消息完整性；`test_session_agent.py` 覆盖跨运行恢复。会话日志可能包含源代码与命令输出，因此只用于本地调试，不能提交到仓库。
+`tests/test_session.py` 覆盖 JSONL 往返、损坏文件、workspace 不匹配、上下文超限、工具消息完整性和 compaction 元数据恢复；`test_session_agent.py` 覆盖跨运行恢复。会话日志可能包含源代码与命令输出，因此只用于本地调试，不能提交到仓库。
+
+上下文增强的行为还可通过 GUI 验证：在 Settings 中设置较小的上下文预算，连续提交多轮任务，观察压缩日志并在 `.sessions/*.jsonl` 中检查 `type: "compaction"` 记录；大文件读取应显示截断标记和 output ID。

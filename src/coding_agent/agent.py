@@ -14,7 +14,11 @@ from .session import (
     RECENT_CONTEXT_CHARS,
     SessionError,
     SessionStore,
+    CompactionState,
     build_model_messages,
+    compact_messages,
+    DEFAULT_RESERVE_TOKENS,
+    estimate_tokens,
 )
 from .tools import ToolDispatcher, ToolResult, truncate_output
 
@@ -67,6 +71,7 @@ class CodingAgent:
         session_store: SessionStore | None = None,
         max_context_chars: int = MAX_CONTEXT_CHARS,
         recent_context_chars: int = RECENT_CONTEXT_CHARS,
+        reserve_tokens: int = DEFAULT_RESERVE_TOKENS,
         mode: str = "auto",
     ) -> None:
         if max_steps < 1:
@@ -80,11 +85,15 @@ class CodingAgent:
         self._session_store = session_store
         self._max_context_chars = max_context_chars
         self._recent_context_chars = recent_context_chars
+        self._reserve_tokens = reserve_tokens
+        if reserve_tokens < 0:
+            raise ValueError("reserve_tokens must be non-negative")
         self._mode = mode
         self._allowed_tools = MODE_TOOL_NAMES[mode]
         self._tool_schemas = [
             schema for schema in TOOL_SCHEMAS if schema["function"]["name"] in self._allowed_tools
         ]
+        self._compaction_state: CompactionState | None = None
 
     def run(self, task: str) -> AgentResult:
         try:
@@ -94,20 +103,36 @@ class CodingAgent:
         tool_steps = 0
 
         while True:
+            self._maybe_compact(messages)
             self._log(f"[Agent Step {tool_steps + 1}] Requesting model")
             try:
+                context_history = _with_mode_instruction(messages, self._mode) if self._mode != "auto" else messages
                 request_messages = build_model_messages(
-                    messages, self._max_context_chars, self._recent_context_chars
+                    context_history,
+                    self._max_context_chars,
+                    self._recent_context_chars,
+                    self._compaction_state,
+                    self._reserve_tokens,
                 )
-                if self._mode != "auto":
-                    request_messages = _with_mode_instruction(request_messages, self._mode)
-                response = self._client.complete(request_messages, tools=self._tool_schemas)
-            except Exception:
-                return AgentResult(
-                    status="error",
-                    answer="Model request failed. Check the model configuration and service.",
-                    messages=messages,
-                )
+                response = self._client.complete(request_messages, tools=self._request_tools())
+            except Exception as error:
+                if _is_context_overflow(error) and self._maybe_compact(messages, force=True):
+                    self._log("Context overflow detected; compacted history and retrying.")
+                    try:
+                        retry_history = _with_mode_instruction(messages, self._mode) if self._mode != "auto" else messages
+                        retry_messages = build_model_messages(
+                            retry_history, self._max_context_chars, self._recent_context_chars,
+                            self._compaction_state, self._reserve_tokens,
+                        )
+                        response = self._client.complete(retry_messages, tools=self._request_tools())
+                    except Exception:
+                        return AgentResult(status="error", answer="Model request failed after context compaction. Check the model configuration and service.", messages=messages)
+                else:
+                    return AgentResult(
+                        status="error",
+                        answer="Model request failed. Check the model configuration and service.",
+                        messages=messages,
+                    )
 
             try:
                 self._append_message(messages, _assistant_message(response))
@@ -155,22 +180,64 @@ class CodingAgent:
     def _start_or_resume(self, task: str) -> list[dict[str, Any]]:
         if self._session_store is None:
             return [
-                {"role": "system", "content": SYSTEM_MESSAGE},
+                {"role": "system", "content": _system_message(self._dispatcher.workspace)},
                 {"role": "user", "content": task},
             ]
         if self._session_store.exists():
             messages = self._session_store.load_messages()
+            self._compaction_state = self._session_store.load_compaction()
             if not messages or messages[0].get("role") != "system":
                 raise SessionError("Session history is missing its initial system message.")
+            if messages[0].get("content") == SYSTEM_MESSAGE:
+                messages[0] = {"role": "system", "content": _system_message(self._dispatcher.workspace)}
             self._append_message(messages, {"role": "user", "content": task})
             return messages
 
         messages = [
-            {"role": "system", "content": SYSTEM_MESSAGE},
+            {"role": "system", "content": _system_message(self._dispatcher.workspace)},
             {"role": "user", "content": task},
         ]
         self._session_store.initialize(messages)
         return messages
+
+    def _request_tools(self) -> list[dict[str, Any]]:
+        schemas = list(self._tool_schemas)
+        if getattr(self._dispatcher, "has_saved_outputs", lambda: False)():
+            from .schemas import READ_OUTPUT_SCHEMA
+            schemas.append(READ_OUTPUT_SCHEMA)
+        return schemas
+
+    def _maybe_compact(self, messages: list[dict[str, Any]], force: bool = False) -> bool:
+        candidate = compact_messages(messages, self._max_context_chars, self._recent_context_chars, self._reserve_tokens)
+        if candidate is None and not force:
+            return False
+        if candidate is None:
+            candidate = _forced_compaction_candidate(messages)
+        if candidate is None:
+            return False
+        prefix, first_kept = candidate
+        previous = self._compaction_state.summary if self._compaction_state else ""
+        prompt = _summarization_prompt(prefix, previous)
+        summary = ""
+        try:
+            response = self._client.complete(
+                [{"role": "system", "content": "Summarize coding-agent context. Return the requested sections only."}, {"role": "user", "content": prompt}],
+                tools=None,
+            )
+            summary = response.content.strip() if isinstance(response.content, str) else ""
+        except Exception:
+            summary = ""
+        if not summary:
+            summary = _local_summary(prefix, previous)
+        read_files, modified_files = _file_operations(prefix)
+        if self._compaction_state:
+            read_files = tuple(dict.fromkeys((*self._compaction_state.read_files, *read_files)))
+            modified_files = tuple(dict.fromkeys((*self._compaction_state.modified_files, *modified_files)))
+        self._compaction_state = CompactionState(summary, first_kept, max(0, estimate_tokens(prefix)), read_files, modified_files)
+        if self._session_store is not None:
+            self._session_store.append_compaction(self._compaction_state)
+        self._log("Context compacted into a structured summary.")
+        return True
 
     def _append_message(self, messages: list[dict[str, Any]], message: dict[str, Any]) -> None:
         messages.append(message)
@@ -240,3 +307,82 @@ def _tool_result_summary(result: ToolResult) -> str:
         for name, value in result.result.items():
             summary[name] = f"<{len(value)} characters>" if name in {"content", "stdout", "stderr"} and isinstance(value, str) else value
     return truncate_output(json.dumps(summary, ensure_ascii=False), 300)
+
+
+def _system_message(workspace: Any) -> str:
+    parts = [SYSTEM_MESSAGE]
+    current = workspace.resolve()
+    ancestors = list(current.parents)[::-1] + [current]
+    instructions: list[str] = []
+    for directory in ancestors:
+        for name in ("AGENTS.md", "CLAUDE.md"):
+            path = directory / name
+            try:
+                content = path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if content:
+                instructions.append(f'<project_instructions path="{path}">\n{content}\n</project_instructions>')
+    if instructions:
+        parts.append("<project_context>\n" + "\n\n".join(instructions) + "\n</project_context>")
+    return "\n\n".join(parts)
+
+
+def _summarization_prompt(messages: list[dict[str, Any]], previous: str) -> str:
+    serialized = json.dumps(messages, ensure_ascii=False, indent=2)
+    return (
+        "Update the coding session summary. Preserve accurate facts and use exactly these sections: "
+        "Goal, Constraints & Preferences, Progress, Key Decisions, Next Steps, Critical Context.\n"
+        + (f"Previous summary:\n{previous}\n\n" if previous else "")
+        + f"Messages to summarize:\n{serialized}"
+    )
+
+
+def _local_summary(messages: list[dict[str, Any]], previous: str) -> str:
+    users = [str(m.get("content", "")).strip() for m in messages if m.get("role") == "user" and m.get("content")]
+    tools = [str(call.get("function", {}).get("name", "unknown")) for m in messages for call in (m.get("tool_calls") or []) if isinstance(call, dict)]
+    return "\n".join([
+        "## Goal", users[0] if users else "Continue the coding task.",
+        "## Constraints & Preferences", "Follow the existing workspace instructions and project architecture.",
+        "## Progress", f"Tools used: {', '.join(tools) if tools else 'none'}.",
+        "## Key Decisions", "Preserve the existing Agent Loop and local session format.",
+        "## Next Steps", "Continue from the retained recent messages.",
+        "## Critical Context", previous or "No additional context recorded.",
+    ])
+
+
+def _file_operations(messages: list[dict[str, Any]]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    read_files: list[str] = []
+    modified_files: list[str] = []
+    for message in messages:
+        for call in message.get("tool_calls", []) or []:
+            if not isinstance(call, dict):
+                continue
+            function = call.get("function", {})
+            if not isinstance(function, dict):
+                continue
+            name = function.get("name")
+            try:
+                args = json.loads(function.get("arguments", "{}"))
+            except (TypeError, json.JSONDecodeError):
+                args = {}
+            path = args.get("path") if isinstance(args, dict) else None
+            if not isinstance(path, str):
+                continue
+            if name == "read_file":
+                read_files.append(path)
+            elif name == "write_file":
+                modified_files.append(path)
+    return tuple(dict.fromkeys(read_files)), tuple(dict.fromkeys(modified_files))
+
+
+def _forced_compaction_candidate(messages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int] | None:
+    if len(messages) < 4:
+        return None
+    first_kept = max(2, len(messages) // 2)
+    return messages[1:first_kept], first_kept
+
+
+def _is_context_overflow(error: Exception) -> bool:
+    text = str(error).lower()
+    return any(token in text for token in ("context length", "context window", "prompt is too long", "maximum context", "too many tokens", "context is too large"))

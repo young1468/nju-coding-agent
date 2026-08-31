@@ -177,6 +177,21 @@ def test_run_command_output_is_truncated(tmp_path) -> None:
     assert result.result["stdout"].endswith(TRUNCATION_SUFFIX)
 
 
+def test_truncated_output_can_be_read_by_id_without_path_access(tmp_path) -> None:
+    (tmp_path / "long.txt").write_text("header\n" + "x" * 200, encoding="utf-8")
+    dispatcher = make_dispatcher(tmp_path, max_output_chars=40)
+
+    result = dispatcher.execute("read_file", {"path": "long.txt"})
+    output_id = result.result["output_id"]
+
+    full = dispatcher.execute("read_output", {"output_id": output_id})
+    invalid = dispatcher.execute("read_output", {"output_id": "../../long.txt"})
+    assert full.success is True
+    assert len(full.result["content"]) == len("header\n" + "x" * 200)
+    assert invalid.success is False
+    assert "Unknown output ID" in invalid.error
+
+
 def test_run_command_uses_shell_false_workspace_and_sanitized_environment(tmp_path, monkeypatch) -> None:
     dispatcher = make_dispatcher(tmp_path)
     captured: dict[str, object] = {}

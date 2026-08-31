@@ -8,9 +8,11 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+import math
 
 MAX_CONTEXT_CHARS = 48_000
 RECENT_CONTEXT_CHARS = 24_000
+DEFAULT_RESERVE_TOKENS = 2_048
 SESSION_VERSION = 1
 
 
@@ -26,6 +28,15 @@ class SessionSummary:
     error: str | None = None
     stored_title: str | None = None
     logs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CompactionState:
+    summary: str
+    first_kept_index: int
+    tokens_before: int
+    read_files: tuple[str, ...] = ()
+    modified_files: tuple[str, ...] = ()
 
 class SessionError(RuntimeError):
     """Raised when a local session cannot be created, loaded, or updated."""
@@ -60,7 +71,7 @@ class SessionStore:
         entries = self._load_entries()
         messages: list[dict[str, Any]] = []
         for entry in entries[1:]:
-            if entry.get("type") in {"title", "log"}:
+            if entry.get("type") in {"title", "log", "compaction"}:
                 continue
             if entry.get("type") != "message":
                 raise SessionError("Session file contains an invalid entry.")
@@ -82,6 +93,36 @@ class SessionStore:
             for entry in self._load_entries()[1:]
             if entry.get("type") == "log" and isinstance(entry.get("content"), str)
         ]
+
+    def load_compaction(self) -> CompactionState | None:
+        latest: CompactionState | None = None
+        for entry in self._load_entries()[1:]:
+            if entry.get("type") != "compaction":
+                continue
+            if not isinstance(entry.get("summary"), str) or not isinstance(entry.get("first_kept_index"), int):
+                continue
+            try:
+                tokens_before = int(entry.get("tokens_before", 0) or 0)
+            except (TypeError, ValueError):
+                tokens_before = 0
+            latest = CompactionState(
+                summary=entry["summary"],
+                first_kept_index=max(0, entry["first_kept_index"]),
+                tokens_before=tokens_before,
+                read_files=tuple(item for item in entry.get("read_files", []) if isinstance(item, str)),
+                modified_files=tuple(item for item in entry.get("modified_files", []) if isinstance(item, str)),
+            )
+        return latest
+
+    def append_compaction(self, state: CompactionState) -> None:
+        self._append_metadata({
+            "type": "compaction",
+            "summary": state.summary,
+            "first_kept_index": state.first_kept_index,
+            "tokens_before": state.tokens_before,
+            "read_files": list(state.read_files),
+            "modified_files": list(state.modified_files),
+        })
 
     def set_title(self, title: str) -> None:
         if not isinstance(title, str) or not title.strip():
@@ -134,10 +175,23 @@ class SessionStore:
             raise SessionError(f"Session file contains an invalid entry on line {number}.")
         return value
 
-def build_model_messages(history: list[dict[str, Any]], max_context_chars: int = MAX_CONTEXT_CHARS, recent_context_chars: int = RECENT_CONTEXT_CHARS) -> list[dict[str, Any]]:
+def build_model_messages(
+    history: list[dict[str, Any]],
+    max_context_chars: int = MAX_CONTEXT_CHARS,
+    recent_context_chars: int = RECENT_CONTEXT_CHARS,
+    compaction: CompactionState | None = None,
+    reserve_tokens: int = 0,
+) -> list[dict[str, Any]]:
     """Build a bounded request view; complete local history remains untouched."""
-    if max_context_chars < 1 or recent_context_chars < 1:
+    if max_context_chars < 1 or recent_context_chars < 1 or reserve_tokens < 0:
         raise ValueError("Context limits must be positive.")
+    if compaction is not None:
+        summary = {"role": "system", "content": "[Compaction summary]\n" + compaction.summary}
+        system_end = next((index for index, message in enumerate(history) if message.get("role") != "system"), len(history))
+        start = min(max(0, compaction.first_kept_index + max(0, system_end - 1)), len(history))
+        base = history[:system_end] + [summary] + history[start:]
+        if len(base) < len(history) or _size(base) <= max_context_chars:
+            history = base
     if _size(history) <= max_context_chars:
         return deepcopy(history)
     systems = [message for message in history if message.get("role") == "system"]
@@ -145,10 +199,16 @@ def build_model_messages(history: list[dict[str, Any]], max_context_chars: int =
     selected: set[int] = set()
     used = 0
     budget = min(max_context_chars, recent_context_chars)
+    if reserve_tokens:
+        budget = max(1, budget - reserve_tokens * 4)
     latest_user = next((index for index in range(len(groups) - 1, -1, -1) if any(message.get("role") == "user" for message in groups[index])), None)
     if latest_user is not None:
+        latest_group = groups[latest_user]
+        if _size(latest_group) > budget and len(latest_group) == 1:
+            latest_group = [_fit_message(latest_group[0], budget)]
+            groups[latest_user] = latest_group
         selected.add(latest_user)
-        used += _size(groups[latest_user])
+        used += _size(latest_group)
     for index in range(len(groups) - 1, -1, -1):
         if index in selected:
             continue
@@ -188,6 +248,8 @@ def inspect_session(path: Path, preview_chars: int = 100) -> SessionSummary:
             if entry_type == "log":
                 if isinstance(entry.get("content"), str):
                     logs.append(entry["content"])
+                continue
+            if entry_type == "compaction":
                 continue
             message = entry.get("message") if entry_type == "message" else None
             if not isinstance(message, dict) or not isinstance(message.get("role"), str):
@@ -244,6 +306,62 @@ def _groups(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
 
 def _size(messages: list[dict[str, Any]]) -> int:
     return len(json.dumps(messages, ensure_ascii=False, separators=(",", ":")))
+
+
+def _fit_message(message: dict[str, Any], budget: int) -> dict[str, Any]:
+    content = message.get("content")
+    if not isinstance(content, str):
+        return deepcopy(message)
+    marker = "\n[message truncated]"
+    shortened = dict(message)
+    low, high = 0, len(content)
+    while low < high:
+        mid = (low + high + 1) // 2
+        shortened["content"] = content[:mid] + marker
+        if _size([shortened]) <= budget:
+            low = mid
+        else:
+            high = mid - 1
+    shortened["content"] = content[:low] + marker
+    return shortened
+
+
+def estimate_tokens(messages: list[dict[str, Any]]) -> int:
+    """Conservatively estimate tokens without adding a tokenizer dependency."""
+    text = json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
+    ascii_count = sum(1 for char in text if ord(char) < 128)
+    non_ascii_count = len(text) - ascii_count
+    return math.ceil(ascii_count / 4) + non_ascii_count
+
+
+def compact_messages(
+    history: list[dict[str, Any]],
+    max_context_chars: int,
+    recent_context_chars: int,
+    reserve_tokens: int = DEFAULT_RESERVE_TOKENS,
+) -> tuple[list[dict[str, Any]], int] | None:
+    """Select an old prefix for summarization and return it with its cut index."""
+    if estimate_tokens(history) <= max(1, max_context_chars // 4) - reserve_tokens:
+        return None
+    groups = _groups([message for message in history if message.get("role") != "system"])
+    if len(groups) < 2:
+        return None
+    keep_budget = max(1, recent_context_chars // 4)
+    used = 0
+    cut_group = len(groups) - 1
+    for index in range(len(groups) - 1, -1, -1):
+        size = estimate_tokens(groups[index])
+        if used + size > keep_budget and index < len(groups) - 1:
+            cut_group = index + 1
+            break
+        used += size
+    if cut_group < len(groups) and groups[cut_group][0].get("role") == "assistant" and cut_group > 0:
+        cut_group -= 1
+    kept_count = sum(len(group) for group in groups[cut_group:])
+    first_kept = len(history) - kept_count
+    if first_kept <= 1 or first_kept >= len(history):
+        return None
+    return history[1:first_kept], first_kept
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

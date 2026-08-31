@@ -13,10 +13,9 @@ Tool Dispatcher <-----------------
  |
  +----------------+
  | Local Tools    |
- | list_files     |
- | read_file      |
- | write_file     |
+ | list/read/write|
  | run_command    |
+ | read_output    |
  +----------------+
  |
 Tool Result
@@ -32,7 +31,7 @@ Agent Loop -> LLM Client -> ... -> Final Answer
 - LLM Client 仅使用 `openai` 包发出 OpenAI Compatible chat completion 请求；不保存
   history、不执行工具、不实现循环。
 - Tool Dispatcher 根据工具名验证 JSON 参数、调用对应的本地 Python 函数，并返回统一的
-  `ToolResult(success, tool, result, error)`。
+  `ToolResult(success, tool, result, error)`；超长输出通过受控 output ID 提供只读回取。
 - Local Tools 是唯一执行文件操作和 `subprocess` 的位置。
 
 ## 不使用 Agent Framework 的原因
@@ -43,6 +42,8 @@ Agent Loop -> LLM Client -> ... -> Final Answer
 
 ## 会话与上下文工程
 
-会话历史由 SessionStore 以 append-only JSONL 保存：首行记录版本与 workspace，后续每行记录一条消息及时间戳。Agent 内部保留完整 history，发送给模型前由 build_model_messages 生成有界请求视图。该分层借鉴 Pi 的持久化数据与模型消息边界思想，但本项目不实现会话树、分支或模型生成压缩摘要。
+会话历史由 SessionStore 以 append-only JSONL 保存：首行记录版本与 workspace，后续每行记录消息、标题、日志或 compaction 元数据。Agent 内部保留完整 history，发送给模型前由 build_model_messages 生成有界请求视图；压缩摘要只替代模型请求视图中的旧消息，不删除原始历史。
 
-上下文预算使用字符数近似。裁剪按完整消息组进行，assistant tool call 与其 tool result 不会被拆开；保留 system message、最新 user task 和最近可容纳的交互，并插入透明的 Context notice。
+上下文预算保留现有字符配置，同时用保守启发式估算 token，并通过 reserve_tokens 为回复预留空间。超限时先按完整消息组选择压缩前缀，assistant tool call 与 tool result 不会被拆开；模型使用结构化摘要、最近消息和最新任务。摘要包含目标、约束、进度、决策、后续步骤和关键上下文，并累计读取/修改文件。
+
+工具输出在进入消息历史前经过行数与 UTF-8 字节双重限制；read_file 保留头部，run_command 保留尾部。若发生截断，完整结果写入受控临时存储，只能使用本次运行生成的 output ID 通过 read_output 获取。项目启动时还会从祖先目录到 workspace 自动加载 AGENTS.md/CLAUDE.md，并以带路径的 XML 标签加入 system prompt。

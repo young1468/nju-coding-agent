@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from coding_agent.session import SessionError, SessionStore, build_model_messages, delete_session_file, inspect_session, list_session_summaries
+from coding_agent.session import CompactionState, SessionError, SessionStore, build_model_messages, delete_session_file, inspect_session, list_session_summaries
 
 
 def test_session_store_round_trip(tmp_path) -> None:
@@ -134,3 +134,24 @@ def test_delete_session_file_removes_only_direct_jsonl_children(tmp_path) -> Non
         with pytest.raises(SessionError, match="direct .jsonl"):
             delete_session_file(invalid, sessions)
     assert nested_file.exists() and outside.exists()
+
+
+def test_compaction_metadata_is_ignored_for_messages_and_rebuilds_context(tmp_path) -> None:
+    workspace = tmp_path / "workspace"; workspace.mkdir()
+    path = tmp_path / "session.jsonl"
+    store = SessionStore(path, workspace)
+    messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "old task"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "latest task"},
+    ]
+    store.initialize(messages)
+    state = CompactionState("## Goal\nFix it", 3, 100, ("app.py",), ("app.py",))
+    store.append_compaction(state)
+
+    assert store.load_messages() == messages
+    assert store.load_compaction() == state
+    rebuilt = build_model_messages(messages, max_context_chars=1000, compaction=state, reserve_tokens=0)
+    assert any("Fix it" in message.get("content", "") for message in rebuilt)
+    assert any(message.get("content") == "latest task" for message in rebuilt)

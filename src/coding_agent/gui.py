@@ -14,7 +14,7 @@ from uuid import uuid4
 from .agent import CodingAgent, MODE_TOOL_NAMES, SYSTEM_MESSAGE
 from .client import LLMClientError, OpenAICompatibleClient
 from .config import ConfigurationError, Settings
-from .session import MAX_CONTEXT_CHARS, RECENT_CONTEXT_CHARS, SessionError, SessionStore, SessionSummary, delete_session_file, list_session_summaries
+from .session import DEFAULT_RESERVE_TOKENS, MAX_CONTEXT_CHARS, RECENT_CONTEXT_CHARS, SessionError, SessionStore, SessionSummary, delete_session_file, list_session_summaries
 from .tools import ToolDispatcher
 
 
@@ -30,6 +30,7 @@ class GuiSettings:
     mode: str = "auto"
     max_context_chars: int = MAX_CONTEXT_CHARS
     recent_context_chars: int = RECENT_CONTEXT_CHARS
+    reserve_tokens: int = DEFAULT_RESERVE_TOKENS
     selected_session: str | None = None
 
 
@@ -326,6 +327,7 @@ class CodingAgentApp:
                 logger=lambda line: (runtime_logs.append(line), self.events.put(("log", line))), session_store=store,
                 mode=mode, max_context_chars=self.settings.max_context_chars,
                 recent_context_chars=self.settings.recent_context_chars,
+                reserve_tokens=self.settings.reserve_tokens,
             )
             result = agent.run(task)
             new_messages = result.messages[len(previous_messages):]
@@ -431,11 +433,13 @@ class CodingAgentApp:
         ttk.Button(dialog, text="Choose session folder", command=lambda: self._choose_directory(dialog, sessions)).pack(anchor="w", padx=12, pady=(2, 6))
         max_context = self._settings_field(dialog, "Context character budget", str(self.settings.max_context_chars))
         recent_context = self._settings_field(dialog, "Recent character budget", str(self.settings.recent_context_chars))
-        ttk.Label(dialog, text="Character budgets approximate context; they are not exact model tokens.").pack(padx=12, pady=6)
+        reserve_tokens = self._settings_field(dialog, "Response reserve tokens", str(self.settings.reserve_tokens))
+        ttk.Label(dialog, text="Character budgets are approximate; reserve tokens leave room for the model reply.").pack(padx=12, pady=6)
         def save() -> None:
             try:
                 self.settings.workspace = workspace.get().strip(); self.settings.sessions_directory = sessions.get().strip()
                 self.settings.max_context_chars = int(max_context.get()); self.settings.recent_context_chars = int(recent_context.get())
+                self.settings.reserve_tokens = int(reserve_tokens.get())
                 _validate_settings(self.settings); self.store.save(self.settings); self.workspace.delete(0, END); self.workspace.insert(0, self.settings.workspace)
                 dialog.destroy(); self.refresh_sessions()
             except ValueError as error: messagebox.showerror("Settings", str(error), parent=dialog)
@@ -455,7 +459,7 @@ class CodingAgentApp:
 def _validate_settings(settings: GuiSettings) -> None:
     if settings.mode not in MODE_TOOL_NAMES:
         raise ValueError("Mode must be Auto, Review, or Plan.")
-    if settings.max_context_chars < 1 or settings.recent_context_chars < 1:
+    if settings.max_context_chars < 1 or settings.recent_context_chars < 1 or settings.reserve_tokens < 0:
         raise ValueError("Context budgets must be positive.")
     if settings.recent_context_chars > settings.max_context_chars:
         raise ValueError("Recent context budget cannot exceed total context budget.")

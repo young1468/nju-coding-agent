@@ -64,3 +64,17 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
 ]
+
+READ_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "read_output",
+        "description": "Read a previously truncated tool output by its output ID.",
+        "parameters": {
+            "type": "object",
+            "properties": {"output_id": {"type": "string"}},
+            "required": ["output_id"],
+            "additionalProperties": False,
+        },
+    },
+}

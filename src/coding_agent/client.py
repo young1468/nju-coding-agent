@@ -14,6 +14,10 @@ from .config import Settings
 class LLMClientError(RuntimeError):
     """Raised when a model response cannot be obtained or understood."""
 
+    def __init__(self, message: str, *, context_overflow: bool = False) -> None:
+        super().__init__(message)
+        self.context_overflow = context_overflow
+
 
 @dataclass(frozen=True)
 class AssistantResponse:
@@ -53,7 +57,9 @@ class OpenAICompatibleClient:
         try:
             response = self._completions.create(**request)
         except Exception as error:
-            raise LLMClientError("Model request failed.") from error
+            text = str(error).lower()
+            overflow = any(token in text for token in ("context length", "context window", "prompt is too long", "maximum context", "too many tokens"))
+            raise LLMClientError("Model request failed: context is too large." if overflow else "Model request failed.", context_overflow=overflow) from error
         return _parse_response(response)
 
 
