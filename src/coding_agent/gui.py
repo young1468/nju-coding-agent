@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import queue
+import re
 import threading
 from tkinter import END, BOTH, X, filedialog, messagebox, ttk
 import tkinter as tk
@@ -51,6 +52,51 @@ class GuiSettingsStore:
     def save(self, settings: GuiSettings) -> None:
         _validate_settings(settings)
         self.path.write_text(json.dumps(asdict(settings), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+@dataclass(frozen=True)
+class ProgressState:
+    phase: str = "Idle"
+    step: int = 0
+    compactions: int = 0
+    status: str = "Idle"
+
+
+def progress_from_logs(lines: list[str], max_steps: int = MAX_STEPS) -> ProgressState:
+    """Derive a compact, human-readable status from the existing agent logs."""
+    phase = "Idle"
+    status = "Idle"
+    step = 0
+    compactions = 0
+    for line in lines:
+        match = re.search(r"\[Agent Step (\d+)\]", line)
+        if match:
+            step = max(step, int(match.group(1)))
+        if "Context compacted" in line:
+            phase = "Context summarized"
+            compactions += 1
+        elif "Context overflow" in line:
+            phase = "Retrying after context overflow"
+        elif "Tool: read_file" in line or "Tool: list_files" in line:
+            phase = "Reading files"
+        elif "Tool: write_file" in line:
+            phase = "Writing files"
+        elif "Tool: run_command" in line:
+            phase = "Running verification"
+        elif "Requesting model" in line:
+            phase = "Analyzing project"
+        elif "final answer" in line.lower():
+            phase = "Completed"
+            status = "Completed"
+    if lines and status == "Idle":
+        status = "Running"
+    if phase == "Completed":
+        status = "Completed"
+    return ProgressState(phase=phase, step=step, compactions=compactions, status=status)
+
+
+def format_progress(state: ProgressState, max_steps: int = MAX_STEPS) -> str:
+    return f"Phase: {state.phase} | Step: {state.step}/{max_steps} | Compactions: {state.compactions} | Status: {state.status}"
 
 
 def new_session_path(directory: Path) -> Path:
@@ -141,6 +187,7 @@ class CodingAgentApp:
         self.log_text: tk.Text | None = None
         self.plan_origin_task = ""
         self.executing_plan = False
+        self.progress_var = tk.StringVar(value=format_progress(ProgressState(), self.settings.max_steps))
         self._build()
         self.refresh_sessions()
         self.root.after(100, self._drain_events)
@@ -163,6 +210,7 @@ class CodingAgentApp:
         self.session_list.pack(fill=BOTH, expand=True, pady=8)
         self.session_list.bind("<<ListboxSelect>>", self.select_session)
         ttk.Label(center, text="Conversation").pack(anchor="w")
+        ttk.Label(center, textvariable=self.progress_var).pack(anchor="w", pady=(2, 2))
         self.output = tk.Text(center, wrap="word", state="disabled")
         self.output.pack(fill=BOTH, expand=True, pady=(6, 4))
         ttk.Label(center, text="Plan (editable in Plan mode)").pack(anchor="w")
@@ -217,6 +265,7 @@ class CodingAgentApp:
         self.session.delete(0, END); self.session.insert(0, str(path))
         self.task.delete("1.0", END); self._append_main(f"New session created: {path.name}")
         self.log_lines = []; self.plan_origin_task = ""; self.executing_plan = False; self._set_plan(""); self._set_plan_actions(False)
+        self._update_progress()
         self._save_settings(); self.refresh_sessions()
 
     def delete_session(self) -> None:
@@ -245,6 +294,7 @@ class CodingAgentApp:
             self.log_lines = []; self.plan_origin_task = ""; self.executing_plan = False
             self._set_plan(""); self.session_list.selection_clear(0, END)
             self.settings.selected_session = None
+            self._update_progress()
         self.refresh_sessions()
         self._save_settings()
 
@@ -271,6 +321,7 @@ class CodingAgentApp:
         self.plan_origin_task = _first_user_task(messages) or ""
         self._set_plan_actions(bool(self.mode.get() == "plan" and last_plan))
         self._render_logs()
+        self._update_progress()
         self._save_settings()
 
     def run_agent(self) -> None:
@@ -298,6 +349,7 @@ class CodingAgentApp:
             except SessionError:
                 existing_logs = []
         self.running = True; self.log_lines = existing_logs; self._render_logs()
+        self._update_progress(status="Running")
         self.run_button.configure(state="disabled"); self._append_main(f"Task:\n{task}"); self._append_main("Starting agent...")
         self.refine_button.configure(state="disabled"); self.execute_plan_button.configure(state="disabled")
         self.delete_button.configure(state="disabled")
@@ -355,20 +407,22 @@ class CodingAgentApp:
         while not self.events.empty():
             kind, value = self.events.get()
             if kind == "log":
-                self.log_lines.append(str(value)); self._append_key_log(str(value)); self._render_logs()
+                self.log_lines.append(str(value)); self._append_key_log(str(value)); self._update_progress(status="Running"); self._render_logs()
             elif kind == "done":
                 payload = value if isinstance(value, dict) else {"answer": value}
-                self._finish("Final answer:\n" + str(payload.get("answer", "")))
+                result_status = str(payload.get("status", "completed"))
+                display_status = "Completed" if result_status == "completed" else "Stopped"
+                self._finish("Final answer:\n" + str(payload.get("answer", "")), display_status)
                 if payload.get("mode") == "plan" and payload.get("status") == "completed":
                     self._set_plan(str(payload.get("answer", "")))
                     self._set_plan_actions(True)
                 elif payload.get("purpose") == "execute_plan":
                     self.executing_plan = False
-            else: self._finish("Error:\n" + str(value))
+            else: self._finish("Error:\n" + str(value), "Failed")
         self.root.after(100, self._drain_events)
 
-    def _finish(self, text: str) -> None:
-        self._append_main(text); self.running = False; self.run_button.configure(state="normal"); self.delete_button.configure(state="normal"); self.refresh_sessions()
+    def _finish(self, text: str, status: str = "Completed") -> None:
+        self._append_main(text); self.running = False; self.run_button.configure(state="normal"); self.delete_button.configure(state="normal"); self._update_progress(status=status); self.refresh_sessions()
         if not self.executing_plan and self.plan_text.get("1.0", END).strip() and self.mode.get() == "plan":
             self._set_plan_actions(True)
 
@@ -395,6 +449,12 @@ class CodingAgentApp:
             self._append_main("Context limit reached; retrying with a summary...")
         elif "final answer" in line.lower():
             self._append_main("Agent finished.")
+
+    def _update_progress(self, status: str | None = None) -> None:
+        state = progress_from_logs(self.log_lines, self.settings.max_steps)
+        if status is not None:
+            state = ProgressState(state.phase, state.step, state.compactions, status)
+        self.progress_var.set(format_progress(state, self.settings.max_steps))
 
     def _show_conversation(self, messages: list[dict[str, object]]) -> None:
         self.output.configure(state="normal"); self.output.delete("1.0", END)

@@ -7,7 +7,7 @@ import json
 import pytest
 
 from coding_agent.agent import MAX_STEPS
-from coding_agent.gui import GuiSettings, GuiSettingsStore, _execute_plan_task, _generate_title, _refine_plan_task, _validate_settings, new_session_path
+from coding_agent.gui import GuiSettings, GuiSettingsStore, ProgressState, _execute_plan_task, _generate_title, _refine_plan_task, _validate_settings, format_progress, new_session_path, progress_from_logs
 from coding_agent.session import SessionStore
 
 
@@ -32,6 +32,26 @@ def test_gui_settings_loads_default_tool_step_limit_from_legacy_file(tmp_path) -
 def test_gui_settings_rejects_invalid_tool_step_limit() -> None:
     with pytest.raises(ValueError, match="Maximum tool interaction steps"):
         _validate_settings(GuiSettings(max_steps=0))
+
+
+def test_progress_state_parses_steps_phases_and_compactions() -> None:
+    state = progress_from_logs([
+        "[Agent Step 1] Requesting model",
+        "[Agent Step 1] Tool: run_command",
+        "Context compacted into a structured summary.",
+        "Context overflow detected; compacted history and retrying.",
+    ], max_steps=24)
+
+    assert state == ProgressState("Retrying after context overflow", 1, 1, "Running")
+    assert "Step: 1/24" in format_progress(state, 24)
+    assert "Compactions: 1" in format_progress(state, 24)
+
+
+def test_progress_state_recovers_completed_history() -> None:
+    state = progress_from_logs(["[Agent Step 2] Assistant: final answer"])
+
+    assert state.phase == "Completed"
+    assert state.status == "Completed"
 
 
 def test_new_session_path_can_initialize_a_resumable_session(tmp_path) -> None:

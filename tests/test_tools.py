@@ -165,6 +165,25 @@ def test_run_command_captures_success_failure_and_timeout(tmp_path) -> None:
     assert timed_out.result["timed_out"] is True
 
 
+def test_verification_commands_include_structured_feedback(tmp_path) -> None:
+    dispatcher = make_dispatcher(tmp_path)
+    result = dispatcher.execute(
+        "run_command", {"program": sys.executable, "args": ["-m", "pytest", "-q"]}
+    )
+
+    assert result.result["verification"]["passed"] is False
+    assert result.result["verification"]["category"] in {"assertion_failed", "command_failed"}
+
+
+def test_non_verification_commands_keep_existing_result_shape(tmp_path) -> None:
+    dispatcher = make_dispatcher(tmp_path)
+    result = dispatcher.execute(
+        "run_command", {"program": sys.executable, "args": ["-c", "print('ok')"]}
+    )
+
+    assert result.result == {"stdout": "ok\n", "stderr": "", "returncode": 0, "timed_out": False}
+
+
 def test_run_command_output_is_truncated(tmp_path) -> None:
     dispatcher = make_dispatcher(tmp_path, max_output_chars=40)
 

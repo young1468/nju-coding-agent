@@ -12,6 +12,8 @@ import tempfile
 import uuid
 from typing import Any
 
+from .feedback import classify_command_feedback, is_verification_command
+
 MAX_OUTPUT_CHARS = 12_000
 MAX_OUTPUT_LINES = 2_000
 MAX_OUTPUT_BYTES = 50 * 1024
@@ -173,6 +175,13 @@ class ToolDispatcher:
                 check=False,
             )
         except FileNotFoundError:
+            if is_verification_command(program, args):
+                return ToolResult(
+                    success=False,
+                    tool="run_command",
+                    result={"verification": classify_command_feedback(program, args, None, stderr="command not found").to_dict()},
+                    error=self._truncate(f"Program not found: {program}"),
+                )
             return self._error("run_command", f"Program not found: {program}")
         except subprocess.TimeoutExpired as error:
             stdout, stdout_info = self._truncate_with_info(_text_output(error.stdout), "tail")
@@ -187,6 +196,10 @@ class ToolDispatcher:
                 result["stdout_info"] = stdout_info
             if stderr_info:
                 result["stderr_info"] = stderr_info
+            if is_verification_command(program, args):
+                result["verification"] = classify_command_feedback(
+                    program, args, None, stdout, stderr, timed_out=True
+                ).to_dict()
             return ToolResult(
                 success=False,
                 tool="run_command",
@@ -208,6 +221,10 @@ class ToolDispatcher:
             result["stdout_info"] = stdout_info
         if stderr_info:
             result["stderr_info"] = stderr_info
+        if is_verification_command(program, args):
+            result["verification"] = classify_command_feedback(
+                program, args, completed.returncode, stdout, stderr
+            ).to_dict()
         if completed.returncode != 0:
             return ToolResult(
                 success=False,
