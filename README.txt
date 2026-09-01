@@ -31,6 +31,10 @@ AGENT_MODEL=your-model-name
 - Plan 生成后可编辑或用 `Refine plan` 修改，确认后点 `Execute plan` 执行。
 - `Settings` 配置 Workspace、会话目录、上下文字符预算、回复预留 token 和最大工具交互步数，不保存 API Key。
 
+## 原理文档
+
+项目架构、模型调用、Agent Loop、工具消息、上下文压缩、会话与 GUI 工作流的分章说明见：[docs/project-guide/README.md](docs/project-guide/README.md)。
+
 会话保存在本地 JSONL 并校验 Workspace；工具路径限制在 Workspace 内，命令使用 `shell=False`。
 
 ## 上下文工程
