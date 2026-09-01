@@ -11,7 +11,7 @@ from tkinter import END, BOTH, X, filedialog, messagebox, ttk
 import tkinter as tk
 from uuid import uuid4
 
-from .agent import CodingAgent, MODE_TOOL_NAMES, SYSTEM_MESSAGE
+from .agent import MAX_STEPS, CodingAgent, MODE_TOOL_NAMES, SYSTEM_MESSAGE
 from .client import LLMClientError, OpenAICompatibleClient
 from .config import ConfigurationError, Settings
 from .session import DEFAULT_RESERVE_TOKENS, MAX_CONTEXT_CHARS, RECENT_CONTEXT_CHARS, SessionError, SessionStore, SessionSummary, delete_session_file, list_session_summaries
@@ -31,6 +31,7 @@ class GuiSettings:
     max_context_chars: int = MAX_CONTEXT_CHARS
     recent_context_chars: int = RECENT_CONTEXT_CHARS
     reserve_tokens: int = DEFAULT_RESERVE_TOKENS
+    max_steps: int = MAX_STEPS
     selected_session: str | None = None
 
 
@@ -335,6 +336,7 @@ class CodingAgentApp:
                 mode=mode, max_context_chars=self.settings.max_context_chars,
                 recent_context_chars=self.settings.recent_context_chars,
                 reserve_tokens=self.settings.reserve_tokens,
+                max_steps=self.settings.max_steps,
             )
             result = agent.run(task)
             new_messages = result.messages[len(previous_messages):]
@@ -445,12 +447,14 @@ class CodingAgentApp:
         max_context = self._settings_field(dialog, "Context character budget", str(self.settings.max_context_chars))
         recent_context = self._settings_field(dialog, "Recent character budget", str(self.settings.recent_context_chars))
         reserve_tokens = self._settings_field(dialog, "Response reserve tokens", str(self.settings.reserve_tokens))
-        ttk.Label(dialog, text="Character budgets are approximate; reserve tokens leave room for the model reply.").pack(padx=12, pady=6)
+        max_steps = self._settings_field(dialog, "Maximum tool interaction steps", str(self.settings.max_steps))
+        ttk.Label(dialog, text="Character budgets are approximate; reserve tokens leave room for the model reply. Tool steps limit model tool-use rounds.").pack(padx=12, pady=6)
         def save() -> None:
             try:
                 self.settings.workspace = workspace.get().strip(); self.settings.sessions_directory = sessions.get().strip()
                 self.settings.max_context_chars = int(max_context.get()); self.settings.recent_context_chars = int(recent_context.get())
                 self.settings.reserve_tokens = int(reserve_tokens.get())
+                self.settings.max_steps = int(max_steps.get())
                 _validate_settings(self.settings); self.store.save(self.settings); self.workspace.delete(0, END); self.workspace.insert(0, self.settings.workspace)
                 dialog.destroy(); self.refresh_sessions()
             except ValueError as error: messagebox.showerror("Settings", str(error), parent=dialog)
@@ -472,6 +476,8 @@ def _validate_settings(settings: GuiSettings) -> None:
         raise ValueError("Mode must be Auto, Review, or Plan.")
     if settings.max_context_chars < 1 or settings.recent_context_chars < 1 or settings.reserve_tokens < 0:
         raise ValueError("Context budgets must be positive.")
+    if settings.max_steps < 1:
+        raise ValueError("Maximum tool interaction steps must be at least 1.")
     if settings.recent_context_chars > settings.max_context_chars:
         raise ValueError("Recent context budget cannot exceed total context budget.")
 

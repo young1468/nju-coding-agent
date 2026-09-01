@@ -2,19 +2,36 @@ from __future__ import annotations
 
 from coding_agent.agent import SYSTEM_MESSAGE
 from coding_agent.client import AssistantResponse
-from coding_agent.gui import GuiSettings, GuiSettingsStore, _execute_plan_task, _generate_title, _refine_plan_task, new_session_path
+import json
+
+import pytest
+
+from coding_agent.agent import MAX_STEPS
+from coding_agent.gui import GuiSettings, GuiSettingsStore, _execute_plan_task, _generate_title, _refine_plan_task, _validate_settings, new_session_path
 from coding_agent.session import SessionStore
 
 
 def test_gui_settings_round_trip_and_new_session_path(tmp_path) -> None:
     path = tmp_path / ".coding-agent-gui.json"
-    settings = GuiSettings(workspace="workspace", sessions_directory="sessions", mode="review", max_context_chars=100, recent_context_chars=50)
+    settings = GuiSettings(workspace="workspace", sessions_directory="sessions", mode="review", max_context_chars=100, recent_context_chars=50, max_steps=20)
     store = GuiSettingsStore(path)
     store.save(settings)
     assert store.load() == settings
     created = new_session_path(tmp_path / "sessions")
     assert created.parent == tmp_path / "sessions"
     assert created.suffix == ".jsonl"
+
+
+def test_gui_settings_loads_default_tool_step_limit_from_legacy_file(tmp_path) -> None:
+    path = tmp_path / ".coding-agent-gui.json"
+    path.write_text(json.dumps({"workspace": "workspace", "sessions_directory": "sessions"}), encoding="utf-8")
+
+    assert GuiSettingsStore(path).load().max_steps == MAX_STEPS
+
+
+def test_gui_settings_rejects_invalid_tool_step_limit() -> None:
+    with pytest.raises(ValueError, match="Maximum tool interaction steps"):
+        _validate_settings(GuiSettings(max_steps=0))
 
 
 def test_new_session_path_can_initialize_a_resumable_session(tmp_path) -> None:

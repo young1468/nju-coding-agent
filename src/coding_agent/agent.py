@@ -22,7 +22,8 @@ from .session import (
 )
 from .tools import ToolDispatcher, ToolResult, truncate_output
 
-MAX_STEPS = 12
+# A conservative default for multi-file fixes while still bounding tool loops.
+MAX_STEPS = 24
 MODE_TOOL_NAMES: dict[str, frozenset[str]] = {
     "auto": frozenset({"list_files", "read_file", "write_file", "run_command"}),
     "review": frozenset({"list_files", "read_file"}),
