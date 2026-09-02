@@ -25,7 +25,10 @@ Plan 阶段没有 `write_file` 和 `run_command` 权限；执行阶段把原始�
 
 Agent 在后台线程运行，主线程通过 `queue.Queue` 消费 `log`、`done`、`error` 事件。主对话区只显示任务、关键节点和最终回复；完整 JSON 位于独立日志窗口。Settings 持久化 workspace、会话目录、模式、上下文预算、回复预留 token 和 `max_steps`，API Key 只从环境读取。
 
+Conversation 标题下方的状态条从已有日志派生 `Phase`、`Step/max_steps`、`Compactions` 和 `Status`。读取文件、写入文件、运行验证、压缩、overflow 重试和最终完成分别映射为简短阶段；选择历史会话时也会重新计算这些统计，不新增会话记录类型。
+
+长期记忆独立于 JSONL：GUI Settings 可以启用记忆并设置注入预算，`View memory` 以只读方式查看全局和当前项目的 Markdown。运行日志会显示加载和提取数量，memory 文件不会写入会话 message。
+
 ## 六、与 Pi 的差异
 
 本项目是线性 append-only 会话，可以恢复和删除，但不能创建分支或回退；Pi 的 Session Tree 不在当前范围内。线性结构更简单、行为更可预测，适合当前 GUI。
-

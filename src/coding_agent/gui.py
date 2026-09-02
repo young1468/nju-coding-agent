@@ -15,6 +15,7 @@ from uuid import uuid4
 from .agent import MAX_STEPS, CodingAgent, MODE_TOOL_NAMES, SYSTEM_MESSAGE
 from .client import LLMClientError, OpenAICompatibleClient
 from .config import ConfigurationError, Settings
+from .memory import DEFAULT_MEMORY_CONTEXT_CHARS, MemoryManager, MemoryStore
 from .session import DEFAULT_RESERVE_TOKENS, MAX_CONTEXT_CHARS, RECENT_CONTEXT_CHARS, SessionError, SessionStore, SessionSummary, delete_session_file, list_session_summaries
 from .tools import ToolDispatcher
 
@@ -33,6 +34,8 @@ class GuiSettings:
     recent_context_chars: int = RECENT_CONTEXT_CHARS
     reserve_tokens: int = DEFAULT_RESERVE_TOKENS
     max_steps: int = MAX_STEPS
+    memory_enabled: bool = True
+    memory_context_chars: int = DEFAULT_MEMORY_CONTEXT_CHARS
     selected_session: str | None = None
 
 
@@ -226,6 +229,7 @@ class CodingAgentApp:
         ttk.Combobox(controls, textvariable=self.mode, values=list(MODE_TOOL_NAMES), state="readonly").pack(fill=X)
         ttk.Button(controls, text="Settings", command=self.open_settings).pack(fill=X, pady=(12, 2))
         ttk.Button(controls, text="View logs", command=self.show_logs).pack(fill=X, pady=(2, 2))
+        ttk.Button(controls, text="View memory", command=self.view_memory).pack(fill=X, pady=(2, 2))
         self.refine_button = ttk.Button(controls, text="Refine plan", command=self.refine_plan, state="disabled")
         self.refine_button.pack(fill=X, pady=(2, 2))
         self.execute_plan_button = ttk.Button(controls, text="Execute plan", command=self.execute_plan, state="disabled")
@@ -381,6 +385,10 @@ class CodingAgentApp:
             store = SessionStore(Path(session), dispatcher.workspace)
             previous_messages = store.load_messages() if store.exists() else []
             client = OpenAICompatibleClient.from_settings(Settings.from_env())
+            memory_manager = (
+                MemoryManager(dispatcher.workspace, client, max_context_chars=self.settings.memory_context_chars)
+                if self.settings.memory_enabled else None
+            )
             runtime_logs: list[str] = []
             agent = CodingAgent(
                 client, dispatcher,
@@ -389,6 +397,7 @@ class CodingAgentApp:
                 recent_context_chars=self.settings.recent_context_chars,
                 reserve_tokens=self.settings.reserve_tokens,
                 max_steps=self.settings.max_steps,
+                memory_manager=memory_manager,
             )
             result = agent.run(task)
             new_messages = result.messages[len(previous_messages):]
@@ -480,6 +489,20 @@ class CodingAgentApp:
         self.log_window.protocol("WM_DELETE_WINDOW", self._close_logs)
         self._render_logs()
 
+    def view_memory(self) -> None:
+        try:
+            store = MemoryStore(Path(self.workspace.get().strip()))
+            content = (
+                f"# Global memory\n\n{store.read_markdown('global')}\n"
+                f"# Project memory\n\n{store.read_markdown('project')}"
+            )
+        except (OSError, ValueError) as error:
+            messagebox.showerror("View memory", str(error), parent=self.root)
+            return
+        window = tk.Toplevel(self.root); window.title("Long-term memory"); window.geometry("760x520")
+        text = tk.Text(window, wrap="word", state="normal"); text.pack(fill=BOTH, expand=True, padx=8, pady=8)
+        text.insert("1.0", content); text.configure(state="disabled")
+
     def _close_logs(self) -> None:
         if self.log_window is not None:
             self.log_window.destroy()
@@ -508,13 +531,18 @@ class CodingAgentApp:
         recent_context = self._settings_field(dialog, "Recent character budget", str(self.settings.recent_context_chars))
         reserve_tokens = self._settings_field(dialog, "Response reserve tokens", str(self.settings.reserve_tokens))
         max_steps = self._settings_field(dialog, "Maximum tool interaction steps", str(self.settings.max_steps))
-        ttk.Label(dialog, text="Character budgets are approximate; reserve tokens leave room for the model reply. Tool steps limit model tool-use rounds.").pack(padx=12, pady=6)
+        memory_enabled = tk.BooleanVar(value=self.settings.memory_enabled)
+        ttk.Checkbutton(dialog, text="Enable long-term memory", variable=memory_enabled).pack(anchor="w", padx=12, pady=(8, 2))
+        memory_context = self._settings_field(dialog, "Memory context character budget", str(self.settings.memory_context_chars))
+        ttk.Label(dialog, text="Character budgets are approximate; reserve tokens leave room for the model reply. Tool steps limit model tool-use rounds. Memory is stored locally in Markdown and a JSON index.").pack(padx=12, pady=6)
         def save() -> None:
             try:
                 self.settings.workspace = workspace.get().strip(); self.settings.sessions_directory = sessions.get().strip()
                 self.settings.max_context_chars = int(max_context.get()); self.settings.recent_context_chars = int(recent_context.get())
                 self.settings.reserve_tokens = int(reserve_tokens.get())
                 self.settings.max_steps = int(max_steps.get())
+                self.settings.memory_enabled = bool(memory_enabled.get())
+                self.settings.memory_context_chars = int(memory_context.get())
                 _validate_settings(self.settings); self.store.save(self.settings); self.workspace.delete(0, END); self.workspace.insert(0, self.settings.workspace)
                 dialog.destroy(); self.refresh_sessions()
             except ValueError as error: messagebox.showerror("Settings", str(error), parent=dialog)
@@ -534,7 +562,7 @@ class CodingAgentApp:
 def _validate_settings(settings: GuiSettings) -> None:
     if settings.mode not in MODE_TOOL_NAMES:
         raise ValueError("Mode must be Auto, Review, or Plan.")
-    if settings.max_context_chars < 1 or settings.recent_context_chars < 1 or settings.reserve_tokens < 0:
+    if settings.max_context_chars < 1 or settings.recent_context_chars < 1 or settings.reserve_tokens < 0 or settings.memory_context_chars < 1:
         raise ValueError("Context budgets must be positive.")
     if settings.max_steps < 1:
         raise ValueError("Maximum tool interaction steps must be at least 1.")

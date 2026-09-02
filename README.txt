@@ -30,6 +30,7 @@ AGENT_MODEL=your-model-name
 - `auto` 可读写和运行命令；`review` 只读审查；`plan` 只读规划。
 - Plan 生成后可编辑或用 `Refine plan` 修改，确认后点 `Execute plan` 执行。
 - `Settings` 配置 Workspace、会话目录、上下文字符预算、回复预留 token 和最大工具交互步数，不保存 API Key。
+- `Settings` 可启用长期记忆并设置记忆上下文预算；`View memory` 查看全局与项目记忆文件。
 
 ## 原理文档
 
@@ -46,13 +47,10 @@ AGENT_MODEL=your-model-name
 - 最大工具交互步数默认 24，可在 GUI 设置中调整；达到上限时任务会停止，避免模型陷入无限工具循环。
 - Agent 会自动加载 workspace 及其祖先目录中的 `AGENTS.md`、`CLAUDE.md` 项目规则。
 
-## 演示与测试
+## 长期记忆
 
-将 Workspace 设为 `demo_workspace` 可演示修复计算器并运行测试：
-
-```powershell
-python scripts/reset_demo.py
-python -m pytest
-```
-
-测试使用 Fake Model，不需要密钥或网络。CLI 仍可用：`python -m coding_agent "任务" --workspace demo_workspace`。
+- 全局记忆保存在用户目录 `.coding-agent/memory.md`，项目记忆保存在 workspace 的 `.coding-agent/memory.md`。
+- 每个记忆文件旁有 `memory-index.json`，用于去重、分类和任务相关检索；Markdown 仍是人工可读来源。
+- 成功任务完成后，模型可提取稳定的用户偏好、项目约定和设计决策；规则会过滤 token、密码、密钥和临时日志。
+- 每轮只注入与当前任务相关的有限记忆，不会把全部历史或全部 memory.md 无限制塞进上下文。
+- 长期记忆是本地应用层能力，不是 Pi 原生的用户画像系统；当前不使用向量数据库或跨会话 embedding 检索。

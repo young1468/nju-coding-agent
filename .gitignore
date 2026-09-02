@@ -11,4 +11,5 @@ htmlcov/
 
 .sessions/
 .coding-agent-gui.json
+.coding-agent/
 pi-agent/

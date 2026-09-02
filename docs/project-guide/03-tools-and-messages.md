@@ -33,6 +33,14 @@ Agent 保存 assistant tool call，再追加对应 tool result。下一次模型
 
 被截断的结果会写入受控临时文件，并返回截断原因、原始行数、原始字节数和 `output_id`。模型只有再次调用 `read_output` 才能读取完整内容。
 
+对 pytest、Python 测试、ruff、mypy、pyright、unittest 以及常见生态测试命令，结果还包含：
+
+```json
+{"verification": {"passed": false, "category": "assertion_failed", "summary": "Verification command failed with test assertions."}}
+```
+
+`feedback.py` 使用纯函数做确定性分类，普通 `run_command` 不增加该字段，保持旧调用方兼容。
+
 ## 五、GUI 为什么隐藏完整 JSON
 
 主对话区只渲染“读取文件”“运行测试”“写入文件”等关键节点，避免完整参数和结果淹没最终回复。完整 tool call、参数、结果和异常会追加到 JSONL 的 `log` 记录，并在 View logs 弹窗中查看。
@@ -40,4 +48,3 @@ Agent 保存 assistant tool call，再追加对应 tool result。下一次模型
 ## 六、优点与限制
 
 工具层的优点是权限集中、参数可验证、结果结构统一，便于增加新工具和做安全测试。当前限制是命令执行仍依赖本机环境，未引入沙箱；工具并行执行、交互式终端和远程 workspace 不在本轮范围内。
-

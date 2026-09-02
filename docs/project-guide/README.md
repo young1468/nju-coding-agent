@@ -10,6 +10,8 @@
 4. [上下文工程与上下文压缩](04-context-engineering.md)
 5. [会话持久化与 GUI 工作流](05-session-and-gui.md)
 6. [安全边界、测试与项目亮点](06-security-testing-highlights.md)
+7. [面试评委模拟提问与回答](07-interview-prep.md)
+8. [One-Minute English Introduction](08-one-minute-english-introduction.md)
 
 ## 一张图看懂项目
 
@@ -45,3 +47,10 @@
 - **当前未实现**：Pi 的多供应商适配体系、Skills 懒加载、Session Tree 分支、流式事件树和多 Agent 编排。
 
 更细的设计背景仍可参考现有的[架构说明](../architecture.md)、[安全设计](../security_design.md)和[测试说明](../testing.md)。
+
+## 当前版本新增能力
+
+- 验证类命令返回确定性的 `verification` 分类，区分通过、断言失败、语法错误、导入错误、超时和命令错误。
+- GUI Conversation 状态条显示阶段、`Step/max_steps`、压缩次数和完成/失败状态；完整工具细节仍在日志弹窗。
+- `scripts/reset_order_demo.py` 可以恢复跨文件演示的故障基线，便于重复录制和验收。
+- 分层长期记忆将全局用户偏好和项目知识保存为本地 Markdown，并按任务检索有限内容注入 Prompt。

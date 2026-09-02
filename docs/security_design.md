@@ -37,3 +37,7 @@ workspace，并将 `run_command` 视为具有该用户权限的本地执行能�
 ## Session Privacy
 
 会话文件可能包含任务、源代码片段和工具结果，保存在用户指定位置；`.sessions/` 已被 Git 忽略。workspace 校验防止同一会话误用于其他项目，但这不是加密或 OS 级隔离。
+
+## Deterministic Verification Feedback
+
+验证反馈由 `feedback.py` 的纯函数根据超时状态、返回码和常见 Python/pytest 标记分类，模型不需要自行解释整段日志。该分类器只增加到验证类命令的结果中，不能替代测试本身，也不会把普通命令误标为测试结论。

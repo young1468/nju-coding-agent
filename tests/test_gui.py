@@ -13,7 +13,7 @@ from coding_agent.session import SessionStore
 
 def test_gui_settings_round_trip_and_new_session_path(tmp_path) -> None:
     path = tmp_path / ".coding-agent-gui.json"
-    settings = GuiSettings(workspace="workspace", sessions_directory="sessions", mode="review", max_context_chars=100, recent_context_chars=50, max_steps=20)
+    settings = GuiSettings(workspace="workspace", sessions_directory="sessions", mode="review", max_context_chars=100, recent_context_chars=50, max_steps=20, memory_enabled=False, memory_context_chars=800)
     store = GuiSettingsStore(path)
     store.save(settings)
     assert store.load() == settings
@@ -26,12 +26,20 @@ def test_gui_settings_loads_default_tool_step_limit_from_legacy_file(tmp_path) -
     path = tmp_path / ".coding-agent-gui.json"
     path.write_text(json.dumps({"workspace": "workspace", "sessions_directory": "sessions"}), encoding="utf-8")
 
-    assert GuiSettingsStore(path).load().max_steps == MAX_STEPS
+    loaded = GuiSettingsStore(path).load()
+    assert loaded.max_steps == MAX_STEPS
+    assert loaded.memory_enabled is True
+    assert loaded.memory_context_chars > 0
 
 
 def test_gui_settings_rejects_invalid_tool_step_limit() -> None:
     with pytest.raises(ValueError, match="Maximum tool interaction steps"):
         _validate_settings(GuiSettings(max_steps=0))
+
+
+def test_gui_settings_rejects_invalid_memory_budget() -> None:
+    with pytest.raises(ValueError, match="Context budgets"):
+        _validate_settings(GuiSettings(memory_context_chars=0))
 
 
 def test_progress_state_parses_steps_phases_and_compactions() -> None:

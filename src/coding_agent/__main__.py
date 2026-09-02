@@ -9,6 +9,7 @@ import sys
 from .agent import CodingAgent
 from .client import LLMClientError, OpenAICompatibleClient
 from .config import ConfigurationError, Settings
+from .memory import MemoryManager
 from .session import SessionStore
 from .tools import ToolDispatcher
 
@@ -50,7 +51,10 @@ def main() -> int:
     if session_store is not None:
         print(f"Session:\n{session_store.path}\n")
     print("Starting agent...\n")
-    result = CodingAgent(client, dispatcher, logger=print, session_store=session_store).run(args.task)
+    memory_manager = MemoryManager(dispatcher.workspace, client)
+    result = CodingAgent(
+        client, dispatcher, logger=print, session_store=session_store, memory_manager=memory_manager
+    ).run(args.task)
     if result.status == "completed":
         print(f"\nFinal Answer:\n{result.answer}")
         return 0

@@ -54,7 +54,10 @@ Plan 模式生成计划后，GUI 允许用户编辑或请求修改；只有点�
 
 Agent 从 workspace 向上查找 `AGENTS.md` 和 `CLAUDE.md`，按祖先目录到当前 workspace 的顺序读取，并使用带 `path` 属性的 XML 标签拼接到 system message。组织级规则先出现，项目级规则后出现。
 
-## 六、优点与限制
+## 六、验证反馈与可观察状态
+
+当 Agent 运行 pytest、lint 或类型检查时，工具结果会附带 `verification`：`passed`、失败类别和简短说明。分类由纯函数完成，模型可以直接依据它决定修复方向。GUI 不让模型生成进度文字，而是从运行日志解析 `Reading files`、`Writing files`、`Running verification`、`Context summarized` 等阶段，并显示当前 Step 和压缩次数。
+
+## 七、优点与限制
 
 优点是循环逻辑短、工具权限显式、每一步都可记录和测试；限制是当前客户端没有流式 token 展示，且 `max_steps` 是轮数上限而不是基于成本或时间的动态预算。
-

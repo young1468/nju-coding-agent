@@ -20,7 +20,8 @@
   messages、追加 assistant/tool messages，并在普通文本回复时结束。
 - 自实现原因：题目要求核心 Agent 行为可解释且不依赖 Agent Framework。历史由
   Agent 层持有的 `list[dict]` 管理，不保存在 client 的全局状态中。
-- `MAX_STEPS=12`：该值预留给外部工具交互次数，不代表模型内部 reasoning steps；
+- `MAX_STEPS=24`：该值预留给外部工具交互次数，不代表模型内部 reasoning steps；
+  GUI Settings 可以覆盖该默认值，达到上限时返回明确的 `max_steps` 状态。
   达到上限会明确停止，避免工具循环无限持续。
 - 提交：`606e733 feat: implement model client and agent loop`。
 
@@ -45,6 +46,18 @@
   run_command -> final answer` 驱动真实本地工具，验证源代码修复、测试文件未改动和
   最终 pytest 成功。
 - 提交：`72995be feat: add coding task demo and e2e validation`。
+
+## Phase 5：GUI 与可恢复会话
+
+- 目标：把 CLI 核心能力放入可审阅、可恢复的桌面工作流。
+- 实现：Tkinter GUI 复用 Agent Loop，提供 Auto/Review/Plan 权限模式、Plan 确认执行、历史会话、独立日志弹窗、会话删除和可配置 `max_steps`。
+- 持久化：SessionStore 使用 append-only JSONL 保存消息、标题、日志和 compaction 元数据，旧会话仍可恢复。
+
+## Phase 6：反馈与可视化
+
+- 目标：让验证结果和长任务进度成为可测试的结构化信号。
+- 实现：`feedback.py` 对 pytest、lint、类型检查等命令分类；GUI 从已有日志派生阶段、Step、压缩次数和完成状态；`reset_order_demo.py` 提供可重复的故障基线。
+- 测试：Fake Model、纯函数分类器和临时目录覆盖失败反馈、历史恢复、状态解析与 reset 安全校验。
 
 ## 会话与上下文增强
 
